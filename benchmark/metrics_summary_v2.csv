@@ -1,0 +1,13 @@
+Dataset,PDR,Avg_Throughput_Mbps,Topology_Stability,Position_Accuracy_m
+cross_Easy,1.0000,0.0127,0.0266,1.0835
+cross_Hard,0.9997,13.9426,0.6142,1.0826
+cross_Moderate,0.9996,0.5935,0.0724,1.0761
+line_Easy,1.0000,0.0125,0.0279,1.1151
+line_Hard,0.9998,13.8946,0.6337,1.1010
+line_Moderate,0.9997,0.5887,0.0714,1.1041
+triangle_Easy,1.0000,0.0123,0.0258,1.2008
+triangle_Hard,0.9998,12.9720,0.6189,1.1848
+triangle_Moderate,0.9992,0.5717,0.0760,1.1890
+v_formation_Easy,1.0000,0.0129,0.0263,0.7441
+v_formation_Hard,0.9999,15.2076,0.6742,0.8522
+v_formation_Moderate,0.9998,0.6018,0.0749,0.7437

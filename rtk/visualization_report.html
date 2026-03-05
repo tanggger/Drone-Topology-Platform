@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RTK航迹仿真数据对齐算法可视化报告</title>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 0 20px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #2c3e50;
+            text-align: center;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 10px;
+        }
+        h2 {
+            color: #34495e;
+            margin-top: 40px;
+            border-left: 4px solid #3498db;
+            padding-left: 15px;
+        }
+        .section {
+            margin-bottom: 40px;
+        }
+        .image-container {
+            text-align: center;
+            margin: 20px 0;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 8px;
+        }
+        .image-container img {
+            max-width: 100%;
+            height: auto;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        .description {
+            background-color: #ecf0f1;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 15px 0;
+        }
+        .highlight {
+            background-color: #fff3cd;
+            border: 1px solid #ffeaa7;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        .stat-card {
+            background-color: #3498db;
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .stat-card h3 {
+            margin: 0 0 10px 0;
+            font-size: 1.2em;
+        }
+        .stat-card p {
+            margin: 0;
+            font-size: 1.5em;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>RTK航迹仿真数据到通信仿真数据的对齐算法可视化报告</h1>
+        
+        <div class="highlight">
+            <strong>项目概述：</strong>本报告展示了RTK航迹数据到ns-3通信仿真数据的完整对齐流程，包括时间对齐、空间对齐和轨迹插值平滑三个核心算法的可视化效果。
+        </div>
+
+        <div class="stats">
+            <div class="stat-card">
+                <h3>无人机数量</h3>
+                <p>20架</p>
+            </div>
+            <div class="stat-card">
+                <h3>仿真时长</h3>
+                <p>100秒</p>
+            </div>
+            <div class="stat-card">
+                <h3>数据点总数</h3>
+                <p>10,000个</p>
+            </div>
+            <div class="stat-card">
+                <h3>时间精度</h3>
+                <p>0.2秒</p>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>1. 时间对齐算法</h2>
+            <div class="description">
+                <strong>算法目标：</strong>将RTK数据的绝对时间戳转换为ns-3仿真的相对时间轴，确保所有无人机的运动和通信事件在仿真中严格同步。
+            </div>
+            
+            <div class="image-container">
+                <h3>时间轴对照图</h3>
+                <img src="time_alignment.png" alt="时间对齐效果图">
+                <p><em>上图：原始时间 vs 仿真时间的对应关系；下图：对齐前后数据分布对比</em></p>
+            </div>
+
+            <div class="image-container">
+                <h3>动画式进度条</h3>
+                <img src="progress_animation.gif" alt="动画式进度条">
+                <p><em>展示时间对齐后，所有无人机在统一时间轴上的同步进度</em></p>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>2. 空间对齐算法</h2>
+            <div class="description">
+                <strong>算法目标：</strong>将WGS84 GPS坐标系转换为ns-3仿真使用的ENU米制直角坐标系，保持空间关系不变的同时统一坐标单位。
+            </div>
+            
+            <div class="image-container">
+                <h3>GPS → ENU 坐标转换效果</h3>
+                <img src="space_alignment.png" alt="空间对齐效果图">
+                <p><em>左图：原始GPS坐标（经纬度）；右图：转换后的ENU坐标（米制）</em></p>
+            </div>
+
+            <div class="highlight">
+                <strong>转换公式：</strong><br>
+                • x = (lon - lon₀) × 111320 × cos(lat₀)<br>
+                • y = (lat - lat₀) × 111320<br>
+                • z = alt - alt₀
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>3. 轨迹插值与平滑算法</h2>
+            <div class="description">
+                <strong>算法目标：</strong>对原始RTK轨迹进行插值补点和平滑处理，消除GPS噪声，生成连续、平滑的无人机运动轨迹。
+            </div>
+            
+            <div class="image-container">
+                <h3>轨迹平滑动态对比</h3>
+                <img src="trajectory_smoothing.gif" alt="轨迹平滑动画">
+                <p><em>左图：原始带噪声轨迹；右图：插值平滑后的轨迹</em></p>
+            </div>
+
+            <div class="highlight">
+                <strong>处理步骤：</strong><br>
+                1. 线性插值：补齐缺失的时间点<br>
+                2. 滑动平均：消除GPS抖动和噪声<br>
+                3. 轨迹验证：确保运动连续性
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>4. 对齐效果总结</h2>
+            <div class="description">
+                <strong>综合评估：</strong>展示三个对齐算法的整体效果，包括时间一致性、空间分布和轨迹质量。
+            </div>
+            
+            <div class="image-container">
+                <h3>对齐算法综合效果</h3>
+                <img src="alignment_summary.png" alt="对齐效果总结图">
+                <p><em>四象限图：时间对齐结果、空间范围统计、轨迹点密度、最终无人机分布</em></p>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>5. 技术创新点</h2>
+            <div class="description">
+                <ul>
+                    <li><strong>自动化对齐：</strong>全流程自动化处理，无需人工干预</li>
+                    <li><strong>高精度转换：</strong>保持时空关系的精确映射</li>
+                    <li><strong>实时验证：</strong>每步处理都有质量检查和统计验证</li>
+                    <li><strong>可扩展性：</strong>支持任意数量无人机和时长的数据处理</li>
+                    <li><strong>兼容性：</strong>输出格式完全兼容ns-3仿真环境</li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>6. 应用价值</h2>
+            <div class="description">
+                本对齐算法实现了<strong>"物理世界-网络仿真世界"</strong>的无缝桥接，为以下应用提供了技术基础：
+                <ul>
+                    <li>真实无人机集群的网络性能评估</li>
+                    <li>基于历史轨迹的通信协议优化</li>
+                    <li>大规模无人机网络的仿真验证</li>
+                    <li>多场景下的网络拓扑分析</li>
+                </ul>
+            </div>
+        </div>
+
+        <footer style="text-align: center; margin-top: 40px; padding-top: 20px; border-top: 1px solid #ddd; color: #666;">
+            <p>RTK航迹仿真数据对齐算法可视化报告 | 生成时间: 2024年8月</p>
+        </footer>
+    </div>
+</body>
+</html>

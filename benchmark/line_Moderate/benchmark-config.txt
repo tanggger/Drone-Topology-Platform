@@ -1,0 +1,35 @@
+=== RTK Benchmark Configuration ===
+Difficulty Level: Moderate
+
+[Channel Model]
+  Path Loss Exponents: 2.8, 3.5, 4
+  Nakagami m parameters: 1, 0.7, 0.5
+
+[RTK Error Model]
+  Base Noise StdDev: 0.08 m
+  Drift Interval: 15
+  Drift Duration: 4
+  Drift Magnitude: 0.5 m
+
+[WiFi Configuration]
+  Standard: 80211n
+  Channel Width: 20 MHz
+  Rate Control: ConstantRate
+  Data Mode: HtMcs5
+  Max Retries: 1
+
+[Traffic Pattern]
+  Heartbeat Rate: 3 pps
+  Heartbeat Size: 600 bytes
+  Video Data Rate: 2 Mbps
+  Sensor Data Rate: 0.8 Mbps
+
+[Communication Parameters]
+  Trigger Probability: 0.6
+  Near Distance: 50 m
+  Decay Span: 150 m
+  Max Comm Distance: 50 m
+
+[Interference]
+  Enabled: Yes
+  Interference Nodes: 8

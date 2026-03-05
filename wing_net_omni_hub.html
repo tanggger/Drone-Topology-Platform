@@ -1,0 +1,2399 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>翼网全境 · Wing-Net Omni Hub | 低空智慧空域指挥系统</title>
+  <style>
+    :root {
+      --bg-deep: #030b14;
+      --bg-panel: rgba(8, 22, 38, 0.82);
+      --cyan: #00f2ff;
+      --green: #00ff88;
+      --orange: #ffaa00;
+      --red: #ff3b3b;
+      --purple: #a855f7;
+      --text-dim: #4a7a9b;
+      --text-main: #c8e6f5;
+      --border: rgba(0, 200, 255, 0.18);
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Segoe UI', 'SF Pro Display', sans-serif;
+      background: var(--bg-deep);
+      color: var(--text-main);
+      height: 100vh;
+      width: 100vw;
+      overflow: hidden;
+      display: grid;
+      grid-template-columns: 300px 1fr 320px;
+      grid-template-rows: 56px 1fr 55px 200px;
+      grid-template-areas:
+        "hd hd hd"
+        "lp cp rp"
+        "lp tl rp"
+        "lp bt rp";
+      gap: 8px;
+      padding: 8px;
+    }
+
+    /* Professional Lab Overlay */
+    #lab-overlay {
+      position: fixed;
+      top: 56px;
+      right: -100%;
+      width: 450px;
+      height: calc(100vh - 64px);
+      background: rgba(3, 11, 20, 0.95);
+      backdrop-filter: blur(15px);
+      border-left: 1px solid var(--cyan);
+      z-index: 1000;
+      transition: right 0.4s cubic-bezier(0.19, 1, 0.22, 1);
+      padding: 20px;
+      color: var(--text-main);
+      box-shadow: -10px 0 30px rgba(0, 0, 0, 0.5);
+    }
+
+    #lab-overlay.active {
+      right: 0;
+    }
+
+    .lab-header {
+      border-bottom: 2px solid var(--border);
+      padding-bottom: 15px;
+      margin-bottom: 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .radar-container {
+      width: 100%;
+      height: 300px;
+      display: flex;
+      justify-content: center;
+      margin: 20px 0;
+    }
+
+    .radar-svg {
+      overflow: visible;
+    }
+
+    .lab-metric-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-top: 20px;
+    }
+
+    .lab-card {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--border);
+      padding: 12px;
+      border-radius: 4px;
+    }
+
+    .lab-card h4 {
+      font-size: 11px;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      margin-bottom: 5px;
+    }
+
+    .lab-card .val {
+      font-size: 20px;
+      font-weight: bold;
+      color: var(--cyan);
+    }
+
+    /* RTK Drift Visual Effect */
+    .drift-ghost {
+      opacity: 0.3;
+      filter: blur(2px);
+    }
+
+    .label-rtk-err {
+      color: var(--red);
+      font-size: 9px;
+      font-weight: bold;
+    }
+
+    /* Glow Button for Lab */
+    .btn-lab-glow {
+      background: linear-gradient(135deg, #a855f7 0%, #6366f1 100%);
+      color: white;
+      border: none;
+      padding: 8px 15px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-weight: bold;
+      transition: all 0.3s;
+      box-shadow: 0 0 10px rgba(168, 85, 247, 0.4);
+    }
+
+    .btn-lab-glow:hover {
+      box-shadow: 0 0 20px rgba(168, 85, 247, 0.8);
+      transform: translateY(-1px);
+    }
+
+    /* Animated starfield bg */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      background: radial-gradient(ellipse 80% 50% at 50% -20%, rgba(0, 100, 200, 0.15) 0%, transparent 60%),
+        radial-gradient(ellipse 60% 40% at 80% 100%, rgba(100, 0, 200, 0.1) 0%, transparent 60%),
+        #030b14;
+    }
+
+    /* ======== HEADER ======== */
+    header {
+      grid-area: hd;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 20px;
+      background: rgba(5, 18, 35, 0.9);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .logo-icon {
+      width: 36px;
+      height: 36px;
+      border: 2px solid var(--cyan);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+
+      0%,
+      100% {
+        box-shadow: 0 0 6px var(--cyan)
+      }
+
+      50% {
+        box-shadow: 0 0 22px var(--cyan)
+      }
+    }
+
+    .logo-title {
+      font-size: 1.1rem;
+      font-weight: 700;
+      letter-spacing: 3px;
+      color: var(--cyan);
+    }
+
+    .logo-sub {
+      font-size: 0.65rem;
+      color: var(--text-dim);
+      letter-spacing: 1px;
+    }
+
+    .header-status {
+      display: flex;
+      gap: 24px;
+      align-items: center;
+      font-size: 0.75rem;
+    }
+
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 12px;
+      border-radius: 2px;
+      border: 1px solid var(--border);
+      background: rgba(0, 242, 255, 0.04);
+    }
+
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+    }
+
+    .dot.green {
+      background: var(--green);
+      box-shadow: 0 0 8px var(--green);
+      animation: blink 1.5s ease-in-out infinite;
+    }
+
+    .dot.cyan {
+      background: var(--cyan);
+      box-shadow: 0 0 8px var(--cyan);
+    }
+
+    .dot.orange {
+      background: var(--orange);
+      box-shadow: 0 0 8px var(--orange);
+      animation: blink 2s ease-in-out infinite;
+    }
+
+    @keyframes blink {
+      50% {
+        opacity: 0.4
+      }
+    }
+
+    #sys-clock {
+      color: var(--cyan);
+      font-family: monospace;
+      font-size: 0.8rem;
+    }
+
+    /* ======== PANELS common ======== */
+    .panel {
+      background: var(--bg-panel);
+      backdrop-filter: blur(16px);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 14px;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .panel::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--cyan), transparent);
+      opacity: 0.5;
+    }
+
+    .ptitle {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      color: var(--cyan);
+      border-left: 2px solid var(--cyan);
+      padding-left: 8px;
+      margin-bottom: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .ptitle .badge {
+      font-size: 0.6rem;
+      padding: 1px 6px;
+      border-radius: 2px;
+      background: rgba(0, 242, 255, 0.12);
+      border: 1px solid var(--border);
+    }
+
+    /* ======== LEFT PANEL ======== */
+    .left-panel {
+      grid-area: lp;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .metric-ring-wrap {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 10px 0;
+    }
+
+    .metric-ring {
+      position: relative;
+      width: 130px;
+      height: 130px;
+    }
+
+    .metric-ring svg {
+      transform: rotate(-90deg);
+    }
+
+    .ring-bg {
+      fill: none;
+      stroke: rgba(0, 242, 255, 0.08);
+      stroke-width: 10;
+    }
+
+    .ring-fg {
+      fill: none;
+      stroke: var(--cyan);
+      stroke-width: 10;
+      stroke-linecap: round;
+      stroke-dasharray: 345;
+      stroke-dashoffset: 34;
+      filter: drop-shadow(0 0 6px var(--cyan));
+      transition: stroke-dashoffset 1s ease;
+    }
+
+    .ring-center {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center;
+      pointer-events: none;
+    }
+
+    .ring-val {
+      font-size: 1.8rem;
+      font-weight: bold;
+    }
+
+    .ring-lbl {
+      font-size: 0.55rem;
+      color: var(--text-dim);
+      letter-spacing: 1px;
+    }
+
+    .metric-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+    }
+
+    .metric-card {
+      background: rgba(0, 242, 255, 0.04);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 8px;
+      text-align: center;
+    }
+
+    .metric-card .val {
+      font-size: 1rem;
+      font-weight: bold;
+    }
+
+    .metric-card .lbl {
+      font-size: 0.55rem;
+      color: var(--text-dim);
+      margin-top: 2px;
+    }
+
+    .uav-list {
+      overflow-y: auto;
+      max-height: 220px;
+    }
+
+    .uav-item {
+      display: grid;
+      grid-template-columns: 30px 1fr 46px 36px 40px;
+      gap: 4px;
+      align-items: center;
+      padding: 6px 4px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+      font-size: 0.7rem;
+      cursor: pointer;
+      transition: 0.2s;
+    }
+
+    .uav-item:hover {
+      background: rgba(0, 242, 255, 0.06);
+    }
+
+    .uav-id {
+      color: var(--cyan);
+      font-weight: bold;
+    }
+
+    .ch-badge {
+      padding: 1px 5px;
+      border-radius: 2px;
+      text-align: center;
+      font-size: 0.6rem;
+      font-weight: bold;
+    }
+
+    .ch0 {
+      background: rgba(0, 242, 255, 0.2);
+      color: var(--cyan);
+    }
+
+    .ch1 {
+      background: rgba(0, 255, 136, 0.2);
+      color: var(--green);
+    }
+
+    .ch2 {
+      background: rgba(168, 85, 247, 0.2);
+      color: var(--purple);
+    }
+
+    .energy-bar-wrap {
+      width: 100%;
+      height: 4px;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 2px;
+    }
+
+    .energy-bar {
+      height: 100%;
+      border-radius: 2px;
+      transition: width 1s;
+    }
+
+    /* ======== CENTER PANEL ======== */
+    .cp {
+      grid-area: cp;
+      position: relative;
+      overflow: hidden;
+    }
+
+    #main-canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .overlay-chips {
+      position: absolute;
+      top: 14px;
+      left: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      pointer-events: none;
+    }
+
+    .chip {
+      background: rgba(3, 11, 20, 0.8);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 4px 10px;
+      font-size: 0.65rem;
+    }
+
+    .chip strong {
+      color: var(--cyan);
+    }
+
+    .canvas-legend {
+      position: absolute;
+      bottom: 14px;
+      left: 14px;
+      display: flex;
+      gap: 12px;
+      pointer-events: none;
+      font-size: 0.62rem;
+    }
+
+    .leg {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .leg-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    .event-badge {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(255, 59, 59, 0.15);
+      border: 1px solid var(--red);
+      border-radius: 4px;
+      padding: 6px 14px;
+      font-size: 0.75rem;
+      color: var(--red);
+      display: none;
+      pointer-events: none;
+      animation: fadeInOut 3s ease forwards;
+    }
+
+    @keyframes fadeInOut {
+      0% {
+        opacity: 0
+      }
+
+      10% {
+        opacity: 1
+      }
+
+      80% {
+        opacity: 1
+      }
+
+      100% {
+        opacity: 0
+      }
+    }
+
+    #algo-label {
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      background: rgba(0, 242, 255, 0.08);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 6px 14px;
+      text-align: right;
+      pointer-events: none;
+    }
+
+    #algo-label .aname {
+      font-size: 0.8rem;
+      color: var(--cyan);
+      font-weight: bold;
+    }
+
+    #algo-label .astat {
+      font-size: 0.6rem;
+      color: var(--text-dim);
+    }
+
+    /* ======== RIGHT PANEL ======== */
+    .right-panel {
+      grid-area: rp;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .pdr-chart-wrap {
+      position: relative;
+      height: 110px;
+    }
+
+    #pdr-lines {
+      width: 100%;
+      height: 100%;
+    }
+
+    .spectrum-grid {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 4px;
+    }
+
+    .sp-bar-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2px;
+    }
+
+    .sp-bar-bg {
+      width: 100%;
+      height: 60px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.04);
+      border-radius: 2px;
+      display: flex;
+      align-items: flex-end;
+    }
+
+    .sp-bar-fill {
+      width: 100%;
+      border-radius: 1px;
+      transition: height 0.8s;
+    }
+
+    .sp-label {
+      font-size: 0.55rem;
+      color: var(--text-dim);
+    }
+
+    .qos-pills {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+    }
+
+    .qos-pill {
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 8px;
+      text-align: center;
+    }
+
+    .qos-pill .qval {
+      font-size: 1.1rem;
+      font-weight: bold;
+    }
+
+    .qos-pill .qlbl {
+      font-size: 0.55rem;
+      color: var(--text-dim);
+      margin-top: 2px;
+    }
+
+    /* ======== TIMELINE ======== */
+    .tl-panel {
+      grid-area: tl;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 6px 14px;
+      background: rgba(5, 18, 35, 0.9);
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .timeline-slider {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    .timeline-labels {
+      display: flex;
+      justify-content: space-between;
+      font-size: 10px;
+      color: var(--text-dim);
+      margin-top: 4px;
+      pointer-events: none;
+    }
+
+    #speed-select,
+    #view-select {
+      background: rgba(0, 0, 0, 0.5);
+      border: 1px solid var(--cyan);
+      color: var(--cyan);
+      padding: 4px 8px;
+      font-size: 11px;
+      border-radius: 2px;
+      cursor: pointer;
+    }
+
+    #speed-select:focus,
+    #view-select:focus {
+      outline: none;
+      box-shadow: 0 0 5px var(--cyan);
+    }
+
+    /* ======== BOTTOM (log + controls) ======== */
+    .bottom-bar {
+      grid-area: bt;
+      display: flex;
+      gap: 8px;
+    }
+
+    .log-panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .log-scroll {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column-reverse;
+    }
+
+    .log-entry {
+      font-family: monospace;
+      font-size: 0.68rem;
+      padding: 3px 6px;
+      border-left: 2px solid transparent;
+      margin-bottom: 2px;
+      animation: fadeIn 0.3s ease;
+    }
+
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+        transform: translateY(5px)
+      }
+
+      to {
+        opacity: 1;
+        transform: none
+      }
+    }
+
+    .log-entry.info {
+      color: #00c8d8;
+      border-color: var(--cyan);
+    }
+
+    .log-entry.warn {
+      color: var(--orange);
+      border-color: var(--orange);
+    }
+
+    .log-entry.crit {
+      color: var(--red);
+      border-color: var(--red);
+      background: rgba(255, 59, 59, 0.05);
+    }
+
+    .log-entry.good {
+      color: var(--green);
+      border-color: var(--green);
+    }
+
+    .ctrl-panel {
+      width: 260px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      overflow-y: auto;
+      max-height: 100%;
+    }
+
+    /* ======== SCENE EDITOR TOOLBAR (floating on canvas) ======== */
+    .scene-toolbar {
+      position: absolute;
+      top: 14px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 10;
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      background: rgba(5, 15, 30, 0.88);
+      border: 1px solid var(--purple);
+      border-radius: 6px;
+      padding: 5px 12px;
+      backdrop-filter: blur(12px);
+      box-shadow: 0 0 18px rgba(168, 85, 247, 0.25);
+    }
+
+    .scene-toolbar .tb-label {
+      font-size: 0.6rem;
+      color: var(--purple);
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      margin-right: 4px;
+      white-space: nowrap;
+    }
+
+    .scene-toolbar .tb-btn {
+      background: rgba(168, 85, 247, 0.12);
+      border: 1px solid rgba(168, 85, 247, 0.4);
+      color: #d8b4fe;
+      border-radius: 4px;
+      padding: 4px 10px;
+      font-size: 0.68rem;
+      cursor: pointer;
+      transition: all 0.2s;
+      white-space: nowrap;
+    }
+
+    .scene-toolbar .tb-btn:hover {
+      background: rgba(168, 85, 247, 0.3);
+      box-shadow: 0 0 8px rgba(168, 85, 247, 0.5);
+    }
+
+    .scene-toolbar .tb-btn.active {
+      background: var(--purple);
+      color: white;
+      box-shadow: 0 0 12px rgba(168, 85, 247, 0.7);
+    }
+
+    .scene-toolbar .tb-divider {
+      width: 1px;
+      height: 20px;
+      background: rgba(168, 85, 247, 0.3);
+      margin: 0 4px;
+    }
+
+    .ctrl-group label {
+      font-size: 0.62rem;
+      color: var(--text-dim);
+      margin-bottom: 4px;
+      display: block;
+    }
+
+    input[type=range] {
+      width: 100%;
+      -webkit-appearance: none;
+      height: 3px;
+      background: rgba(0, 242, 255, 0.2);
+      border-radius: 2px;
+      cursor: pointer;
+    }
+
+    input[type=range]::-webkit-slider-thumb {
+      appearance: none;
+      -webkit-appearance: none;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: var(--cyan);
+      cursor: pointer;
+      box-shadow: 0 0 8px var(--cyan);
+    }
+
+    .btn-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+    }
+
+    .ctrl-btn {
+      padding: 6px 4px;
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      border: 1px solid var(--border);
+      background: rgba(0, 242, 255, 0.04);
+      color: var(--cyan);
+      cursor: pointer;
+      border-radius: 2px;
+      transition: 0.2s;
+    }
+
+    .ctrl-btn:hover {
+      background: rgba(0, 242, 255, 0.15);
+      box-shadow: 0 0 10px rgba(0, 242, 255, 0.2);
+    }
+
+    .ctrl-btn.danger {
+      border-color: rgba(255, 59, 59, 0.4);
+      color: var(--red);
+      background: rgba(255, 59, 59, 0.04);
+    }
+
+    .ctrl-btn.danger:hover {
+      background: rgba(255, 59, 59, 0.15);
+    }
+
+    .ctrl-btn.active {
+      background: rgba(0, 255, 136, 0.12);
+      border-color: var(--green);
+      color: var(--green);
+    }
+
+    /* scrollbar */
+    ::-webkit-scrollbar {
+      width: 3px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: rgba(0, 242, 255, 0.2);
+      border-radius: 2px;
+    }
+  </style>
+</head>
+
+<body>
+
+  <!-- ======== HEADER ======== -->
+  <header>
+    <div class="logo">
+      <div class="logo-icon">⬡</div>
+      <div>
+        <div class="logo-title">WING-NET OMNI HUB</div>
+        <div class="logo-sub">翼网全境 · 低空智慧空域一体化调度系统 v2.0</div>
+      </div>
+    </div>
+    <div class="header-status">
+      <div class="status-badge">
+        <div class="dot cyan"></div><span>RTK 轨迹引擎</span>
+      </div>
+      <div class="status-badge">
+        <div class="dot green"></div><span>图着色算法 运行中</span>
+      </div>
+      <div class="status-badge">
+        <div class="dot orange"></div><span>能耗感知调度</span>
+      </div>
+      <div class="status-badge">
+        <div class="dot green"></div><span>空-地协同 在线</span>
+      </div>
+      <div id="sys-clock">--:--:--</div>
+    </div>
+  </header>
+
+  <!-- ======== LEFT PANEL ======== -->
+  <aside class="panel left-panel">
+    <div class="ptitle">网络全域健康度 <span class="badge">综合 QoS 指数</span></div>
+    <div class="metric-ring-wrap">
+      <div class="metric-ring">
+        <svg viewBox="0 0 120 120" width="130" height="130">
+          <circle class="ring-bg" cx="60" cy="60" r="55" />
+          <circle class="ring-fg" id="ring-fg" cx="60" cy="60" r="55" />
+        </svg>
+        <div class="ring-center">
+          <div class="ring-val" id="health-val">--</div>
+          <div class="ring-lbl">QoS INDEX</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="metric-row">
+      <div class="metric-card">
+        <div class="val" id="m-pdr" style="color:var(--green)">--</div>
+        <div class="lbl">平均 PDR</div>
+      </div>
+      <div class="metric-card">
+        <div class="val" id="m-delay" style="color:var(--orange)">-- ms</div>
+        <div class="lbl">P99 时延</div>
+      </div>
+      <div class="metric-card">
+        <div class="val" id="m-tp" style="color:var(--cyan)">-- Mbps</div>
+        <div class="lbl">总吞吐量</div>
+      </div>
+      <div class="metric-card">
+        <div class="val" id="m-link" style="color:var(--purple)">--</div>
+        <div class="lbl">活跃链路</div>
+      </div>
+    </div>
+
+    <div class="ptitle" style="margin-top:10px;">微波拓扑与连通性态势 <span class="badge">动态子图预警</span></div>
+    <div class="metric-row">
+      <div class="metric-card">
+        <div class="val" id="t-conn" style="color:#00c8d8">--</div>
+        <div class="lbl">全局连通率</div>
+      </div>
+      <div class="metric-card">
+        <div class="val" id="t-part" style="color:var(--red)">1</div>
+        <div class="lbl">分裂岛屿数</div>
+      </div>
+    </div>
+
+    <div class="ptitle" style="margin-top:10px;">活动节点档案 <span class="badge" id="active-count">0 / 15</span></div>
+    <div class="uav-list" id="uav-list"></div>
+  </aside>
+
+  <!-- ======== CENTER CANVAS ======== -->
+  <main class="panel cp">
+    <canvas id="main-canvas"></canvas>
+    <div class="overlay-chips">
+      <div class="chip">场景: <strong>CBD 应急物流走廊</strong></div>
+      <div class="chip">模式: <strong>动态图着色 + 能耗感知</strong></div>
+      <div class="chip" id="topo-chip">拓扑连通性: <strong>--</strong></div>
+      <div class="chip" id="conflict-chip">同频冲突: <strong>0</strong></div>
+    </div>
+    <div class="canvas-legend">
+      <div class="leg">
+        <div class="leg-dot" style="background:var(--cyan)"></div>CH1 节点
+      </div>
+      <div class="leg">
+        <div class="leg-dot" style="background:var(--green)"></div>CH2 节点
+      </div>
+      <div class="leg">
+        <div class="leg-dot" style="background:var(--purple)"></div>CH3 节点
+      </div>
+      <div class="leg">
+        <div class="leg-dot" style="background:var(--red)"></div>同频冲突
+      </div>
+      <div class="leg">
+        <div class="leg-dot" style="background:var(--orange)"></div>NLOS 遮挡
+      </div>
+      <div class="leg">
+        <div class="leg-dot" style="background:white; opacity:0.4"></div>地面站
+      </div>
+    </div>
+    <div id="algo-label">
+      <div class="aname">DSATUR 图着色算法</div>
+      <div class="astat" id="algo-stat">第 0 次全局优化 · 耗时 0ms</div>
+    </div>
+    <div class="event-badge" id="event-badge">⚠ 干扰注入 · 算法紧急重分配中...</div>
+
+    <!-- ======== SCENE EDITOR FLOATING TOOLBAR ======== -->
+    <div class="scene-toolbar" id="scene-toolbar">
+      <span class="tb-label">🗺 场景编辑器</span>
+      <div class="tb-divider"></div>
+      <button class="tb-btn" id="tb-bldg" onclick="tbSetMode('bldg')">🏗 画楼宇</button>
+      <button class="tb-btn" id="tb-intf" onclick="tbSetMode('intf')">⚡ 画干扰</button>
+      <div class="tb-divider"></div>
+      <button class="tb-btn" onclick="clearBuildings()">🧹 清空建筑</button>
+      <button class="tb-btn" onclick="clearIntf()">🧹 清空干扰</button>
+      <div class="tb-divider"></div>
+      <button class="tb-btn" onclick="exportScene()"
+        style="color:#e9d5ff;border-color:var(--purple);background:rgba(168,85,247,0.25);">💾 导出场景 JSON</button>
+    </div>
+  </main>
+
+  <!-- ======== RIGHT PANEL ======== -->
+  <aside class="panel right-panel">
+    <div class="ptitle">全网平均 PDR 实时对比 <span class="badge">演播帧</span></div>
+    <div class="pdr-chart-wrap" style="height: 100px;">
+      <canvas id="pdr-lines"></canvas>
+    </div>
+
+    <div class="ptitle">骨干网络吞吐量态势 <span class="badge">Aggregate Throughput</span></div>
+    <div class="pdr-chart-wrap" style="height: 100px;">
+      <!-- Using the same styling block for the throughput chart -->
+      <canvas id="tp-lines"></canvas>
+    </div>
+
+    <div class="ptitle">频谱占用与任务分布 <span class="badge">信道/类型</span></div>
+    <div class="spectrum-grid" id="spectrum-grid"></div>
+    <div
+      style="font-size: 0.65rem; color: var(--text-dim); margin-top: 4px; display: flex; justify-content: space-between;">
+      <span>🟢 高清图传流: <span id="count-video" style="color: var(--green);">0</span></span>
+      <span>🟠 飞控防碰撞: <span id="count-control" style="color: var(--orange);">0</span></span>
+    </div>
+
+    <div class="ptitle" style="margin-top:10px;">防灾难 QoS 断言 <span class="badge">底线阈值</span></div>
+    <div class="qos-pills">
+      <div class="qos-pill">
+        <div class="qval" id="q-avail" style="color:var(--green)">--%</div>
+        <div class="qlbl">5秒级可用性</div>
+      </div>
+      <div class="qos-pill">
+        <div class="qval" id="q-p99" style="color:var(--orange)">-- ms</div>
+        <div class="qlbl">P999 时延界限</div>
+      </div>
+      <div class="qos-pill">
+        <div class="qval" id="q-alloc" style="color:var(--purple)">-- ms</div>
+        <div class="qlbl">算法收敛耗时</div>
+      </div>
+      <div class="qos-pill">
+        <div class="qval" id="q-ee" style="color:var(--cyan)">-- dBm</div>
+        <div class="qlbl">均方发射功率</div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ======== TIMELINE ======== -->
+  <div class="panel tl-panel">
+    <button class="ctrl-btn active" id="play-pause-btn"
+      style="width:36px;height:36px;border-radius:50%;font-size:16px;padding:0;display:flex;align-items:center;justify-content:center;"
+      onclick="togglePlay()">⏸</button>
+    <div class="timeline-slider">
+      <input type="range" id="time-slider" min="0" max="600" value="0" style="width:100%">
+      <div class="timeline-labels">
+        <span>00:00 任务部署</span><span>02:30 突发大楼遮挡</span><span>05:00 遭受干扰攻击</span><span>07:30 失去GCS脱网</span><span>10:00
+          编队集结成功</span>
+      </div>
+    </div>
+    <select id="speed-select" onchange="changeSpeed(this.value)">
+      <option value="1">1x 实时回放</option>
+      <option value="2">2x 倍速</option>
+      <option value="4">4x 倍速</option>
+    </select>
+    <select id="view-select" onchange="changeView(this.value)">
+      <option value="normal">🌐 默认全局统筹视角</option>
+      <option value="split">⚖️ AB 屏算法对照演播</option>
+      <option value="follow">🎯 UAV_00 抵近跟踪视角</option>
+    </select>
+  </div>
+
+  <!-- ======== BOTTOM LOG ======== -->
+  <div class="panel bottom-bar">
+    <div class="log-panel" style="flex:1">
+      <div class="ptitle">决策日志 <span class="badge" id="log-count">0 条事件</span></div>
+      <div class="log-scroll" id="log-scroll"></div>
+    </div>
+
+    <div class="panel ctrl-panel" style="background:rgba(5,15,28,0.6);">
+      <div class="ptitle">场景控制台</div>
+      <div class="ctrl-group">
+        <label>机群规模: <span id="uav-count-label">15</span> 架</label>
+        <input type="range" id="uav-slider" min="5" max="30" value="15">
+      </div>
+      <div class="ctrl-group">
+        <label>干扰强度: <span id="intf-label">低</span></label>
+        <input type="range" id="intf-slider" min="0" max="3" step="1" value="0">
+      </div>
+      <div class="btn-row">
+        <button class="ctrl-btn" onclick="injectInterference()">注入干扰源</button>
+        <button class="ctrl-btn" id="nlos-btn" onclick="toggleNLOS()">启用遮挡感知</button>
+      </div>
+      <div class="btn-row">
+        <button class="ctrl-btn" id="gcs-btn" onclick="toggleGCS()">地面站故障</button>
+        <button class="ctrl-btn" id="energy-btn" onclick="toggleEnergy(this)">能耗博弈模式</button>
+      </div>
+      <div class="btn-row">
+        <button class="ctrl-btn danger" onclick="stressTest()">极端压力测试</button>
+        <button class="ctrl-btn active" onclick="resetSim()">重置仿真</button>
+      </div>
+
+      <div class="ctrl-group">
+        <h3 class="ctrl-title">全局仿真控制</h3>
+        <div class="ctrl-row">
+          <button class="btn" onclick="togglePlay()" id="btn-play">▶ 启动</button>
+          <button class="btn" onclick="resetSim()">↺ 重置</button>
+        </div>
+        <div class="ctrl-row">
+          <button class="btn" onclick="toggleEnergy(this)">🔋 能耗模拟: 关</button>
+          <button class="btn" onclick="toggleRTKDrift(this)" id="btn-rtk">📍 RTK漂移: 关</button>
+        </div>
+      </div>
+
+      <div class="ctrl-group">
+        <h3 class="ctrl-title">学术分析与对比</h3>
+        <div class="ctrl-row">
+          <button class="btn-lab-glow" style="width:100%" onclick="toggleLab()">🔬 进入科研分析实验室</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scientific Lab Overlay -->
+  <div id="lab-overlay">
+    <div class="lab-header">
+      <h2 style="color: var(--cyan); letter-spacing: 2px;">🔬 SCIENTIFIC ANALYTICS LAB</h2>
+      <button class="btn" onclick="toggleLab()">关闭 ×</button>
+    </div>
+
+    <div
+      style="background: rgba(0,242,255,0.05); border: 1px solid var(--border); padding: 15px; border-radius: 4px; margin-bottom: 20px;">
+      <p style="font-size: 13px; line-height: 1.5;">本项目对比了 <b>DSATUR 图着色算法 (Graph-Coloring)</b> 与传统 <b>Greedy</b> 及
+        <b>Static</b> 策略在城市复杂场景下的表现。下方雷达图展示了各维度的均衡指标。
+      </p>
+    </div>
+
+    <h3 style="font-size: 14px; color: var(--text-dim); text-align: center;">三类算法综合性能对标 (Normalized)</h3>
+    <div class="radar-container" id="radar-box">
+      <!-- Radar SVG will be injected here -->
+    </div>
+
+    <div class="lab-metric-grid">
+      <div class="lab-card">
+        <h4>算法增益 (Gain)</h4>
+        <div class="val">+28.4%</div>
+        <p style="font-size: 10px; color: var(--green);">对比 Static 策略</p>
+      </div>
+      <div class="lab-card">
+        <h4>平均 PDR</h4>
+        <div class="val" id="lab-pdr">94.2%</div>
+        <p style="font-size: 10px; color: var(--cyan);">当前集群实时均值</p>
+      </div>
+      <div class="lab-card">
+        <h4>RTK 定位精度</h4>
+        <div class="val" id="lab-rtk-err">0.02m</div>
+        <p style="font-size: 10px; color: var(--green);" id="lab-rtk-status">高精度同步中</p>
+      </div>
+      <div class="lab-card">
+        <h4>拓扑稳定性</h4>
+        <div class="val">0.88</div>
+        <p style="font-size: 10px; color: var(--text-dim);">Scale 0.0 - 1.0</p>
+      </div>
+    </div>
+
+    <div style="margin-top: 30px;">
+      <h3 class="ctrl-title">导出分析报告</h3>
+      <div class="ctrl-row">
+        <button class="btn" style="flex: 1;" onclick="alert('正在生成 PDF 高级分析报告...')">导出科研 PDF</button>
+        <button class="btn" style="flex: 1;" onclick="alert('数据 CSV 已后台备份')">原始 CSV</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ================================================================
+    // GLOBAL STATE
+    // ================================================================
+    const STATE = {
+      uavCount: 15,
+      interferenceLevel: 0,
+      nlosEnabled: true,
+      gcsFailure: false,
+      energyMode: false,
+      tick: 0,
+      algoRuns: 0,
+      logCount: 0,
+      playing: true,
+      speed: 1,
+      viewMode: 'normal',
+      rtkDrift: false
+    };
+
+    const CHANNELS = ['CH1', 'CH2', 'CH3'];
+    const CH_COLORS = ['#00f2ff', '#00ff88', '#a855f7'];
+    const CH_BCOLORS = ['rgba(0,242,255,0.18)', 'rgba(0,255,136,0.18)', 'rgba(168,85,247,0.18)'];
+
+    let uavs = [];
+    let groundStations = [];
+    let buildings = [];
+    let pdrHistory = { opt: [], base: [] };
+    let tpHistory = { opt: [], base: [] };
+    const PDR_MAX_POINTS = 60;
+
+    // Interaction State
+    const InteractionMode = { NONE: 0, ADD_INTF: 1, ADD_BLDG: 2 };
+    let currentInteractionMode = InteractionMode.NONE;
+    let isDragging = false;
+    let dragStart = { x: 0, y: 0 };
+    let currentDragZone = null;
+    let customIntfZones = []; // Stores user-added interference zones
+
+    // ================================================================
+    // CANVAS SETUP
+    // ================================================================
+    const canvas = document.getElementById('main-canvas');
+    const ctx = canvas.getContext('2d');
+    let W = 0, H = 0;
+
+    function resizeCanvas() {
+      W = canvas.parentElement.clientWidth;
+      H = canvas.parentElement.clientHeight;
+      canvas.width = W;
+      canvas.height = H;
+      initScene();
+    }
+
+    function initScene() {
+      // Ground Stations (fixed)
+      groundStations = [
+        { x: 0.08 * W, y: 0.85 * H, range: 110, active: true },
+        { x: 0.92 * W, y: 0.85 * H, range: 100, active: true },
+      ];
+
+      // Buildings (Mock OpenStreetMap GIS data - darker style)
+      buildings = [
+        { x: 0.25 * W, y: 0.15 * H, w: 0.15 * W, h: 0.25 * H, name: "广百百货" },
+        { x: 0.50 * W, y: 0.10 * H, w: 0.12 * W, h: 0.35 * H, name: "中信广场" },
+        { x: 0.70 * W, y: 0.22 * H, w: 0.10 * W, h: 0.20 * H, name: "太古汇" },
+        { x: 0.32 * W, y: 0.50 * H, w: 0.18 * W, h: 0.15 * H, name: "天河城" },
+        { x: 0.60 * W, y: 0.60 * H, w: 0.12 * W, h: 0.25 * H, name: "正佳广场" },
+        { x: 0.10 * W, y: 0.40 * H, w: 0.15 * W, h: 0.15 * H, name: "购书中心" },
+      ];
+
+      initUAVs();
+    }
+
+    function initUAVs() {
+      uavs = [];
+      for (let i = 0; i < STATE.uavCount; i++) {
+        const ch = i % 3;
+        uavs.push({
+          id: i,
+          x: 0.1 * W + Math.random() * 0.8 * W,
+          y: 0.1 * H + Math.random() * 0.75 * H,
+          vx: (Math.random() - 0.5) * 1.5,
+          vy: (Math.random() - 0.5) * 1.5,
+          channel: ch,
+          energy: 60 + Math.random() * 40,
+          pdr: 0.85 + Math.random() * 0.15,
+          txPower: 20,
+          isNLOS: false,
+          conflict: false,
+          gcsConnected: true,
+          type: Math.random() > 0.3 ? 'video' : 'control', // 70% HD video, 30% control
+          failed: false
+        });
+      }
+    }
+
+    // ================================================================
+    // GEOMETRY HELPERS
+    // ================================================================
+    function lineIntersectsRect(ax, ay, bx, by, rx, ry, rw, rh) {
+      function seg(p, q, r, s) {
+        const d = (s.y - r.y) * (q.x - p.x) - (s.x - r.x) * (q.y - p.y);
+        if (!d) return false;
+        const t = ((s.x - r.x) * (p.y - r.y) - (s.y - r.y) * (p.x - r.x)) / d;
+        const u = ((q.x - p.x) * (p.y - r.y) - (q.y - p.y) * (p.x - r.x)) / d;
+        return t > 0 && t < 1 && u > 0 && u < 1;
+      }
+      const p = { x: ax, y: ay }, q = { x: bx, y: by };
+      return seg(p, q, { x: rx, y: ry }, { x: rx + rw, y: ry, }) ||
+        seg(p, q, { x: rx + rw, y: ry }, { x: rx + rw, y: ry + rh }) ||
+        seg(p, q, { x: rx + rw, y: ry + rh }, { x: rx, y: ry + rh }) ||
+        seg(p, q, { x: rx, y: ry + rh }, { x: rx, y: ry });
+    }
+
+    function isBlocked(u1, u2) {
+      if (!STATE.nlosEnabled) return false;
+      return buildings.some(b => lineIntersectsRect(u1.x, u1.y, u2.x, u2.y, b.x, b.y, b.w, b.h));
+    }
+
+    function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+
+    // ================================================================
+    // GRAPH COLORING ALGORITHM (simplified DSATUR)
+    // ================================================================
+    function runGraphColoring() {
+      STATE.algoRuns++;
+      const t0 = performance.now();
+      const n = uavs.length;
+      const RANGE = 160;
+
+      // Build adjacency
+      const adj = Array.from({ length: n }, () => []);
+      for (let i = 0; i < n; i++)
+        for (let j = i + 1; j < n; j++)
+          if (dist(uavs[i], uavs[j]) < RANGE && !isBlocked(uavs[i], uavs[j])) {
+            adj[i].push(j); adj[j].push(i);
+          }
+
+      // Degree-sort
+      const order = [...Array(n).keys()].sort((a, b) => adj[b].length - adj[a].length);
+
+      const colors = new Array(n).fill(-1);
+      for (const node of order) {
+        const used = new Set(adj[node].filter(nb => colors[nb] >= 0).map(nb => colors[nb]));
+        let c = 0;
+        while (used.has(c)) c++;
+        colors[node] = c % 3;
+      }
+
+      uavs.forEach((u, i) => {
+        // In SPLIT mode, left side UAVs get random channels (simulating no sync)
+        if (STATE.viewMode === 'split' && u.x < W / 2) {
+          u.channel = Math.floor(Math.random() * 3);
+        } else {
+          u.channel = colors[i];
+        }
+        u.conflict = false;
+      });
+
+      // Mark remaining conflicts (when more nodes than optimal channels)
+      for (let i = 0; i < n; i++)
+        for (const j of adj[i])
+          if (uavs[i].channel === uavs[j].channel) { uavs[i].conflict = true; uavs[j].conflict = true; }
+
+      const elapsed = (performance.now() - t0).toFixed(1);
+      document.getElementById('algo-stat').textContent =
+        `第 ${STATE.algoRuns} 次全局优化 · 耗时 ${elapsed}ms`;
+
+      return Math.round(elapsed);
+    }
+
+    // ================================================================
+    // DRAW LOOP
+    // ================================================================
+    function draw() {
+      ctx.clearRect(0, 0, W, H);
+
+      ctx.save();
+      // Follow View transformation
+      if (STATE.viewMode === 'follow' && uavs[0]) {
+        const target = uavs[0];
+        ctx.translate(W / 2, H / 2);
+        ctx.scale(1.8, 1.8);
+        ctx.translate(-target.x, -target.y);
+      }
+
+      // Grid
+      ctx.strokeStyle = 'rgba(0,200,255,0.04)';
+      ctx.lineWidth = 1;
+      for (let x = 0; x < W; x += 50) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+      for (let y = 0; y < H; y += 50) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+
+      // Buildings Graphic - Realistic GIS Style
+      buildings.forEach(b => {
+        // Base shadow
+        ctx.fillStyle = 'rgba(0,10,20,0.85)';
+        ctx.fillRect(b.x + 4, b.y + 4, b.w, b.h);
+        // Main block
+        ctx.fillStyle = 'rgba(20,40,65,0.7)';
+        ctx.fillRect(b.x, b.y, b.w, b.h);
+        // Border lines
+        ctx.strokeStyle = 'rgba(60,100,140,0.6)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(b.x, b.y, b.w, b.h);
+        // Floor pattern (simulated)
+        ctx.beginPath();
+        for (let y = b.y + 10; y < b.y + b.h; y += 15) { ctx.moveTo(b.x, y); ctx.lineTo(b.x + b.w, y); }
+        ctx.strokeStyle = 'rgba(100,150,200,0.1)';
+        ctx.stroke();
+
+        // Label
+        ctx.font = 'bold 10px sans-serif';
+        ctx.fillStyle = 'rgba(150,200,240,0.9)';
+        const textWidth = ctx.measureText(b.name || "BLDG").width;
+        ctx.fillText(b.name || "BLDG", b.x + b.w / 2 - textWidth / 2, b.y + b.h / 2);
+      });
+
+      // GCS range circles
+      groundStations.forEach(gs => {
+        if (!gs.active) return;
+        ctx.beginPath();
+        ctx.arc(gs.x, gs.y, gs.range, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      });
+
+      // Interference zones
+      if (STATE.interferenceLevel > 0 || customIntfZones.length > 0) {
+        const presetZones = [];
+        if (STATE.interferenceLevel > 0) presetZones.push({ x: 0.5 * W, y: 0.4 * H });
+        if (STATE.interferenceLevel > 1) presetZones.push({ x: 0.2 * W, y: 0.6 * H });
+        if (STATE.interferenceLevel > 2) presetZones.push({ x: 0.74 * W, y: 0.55 * H });
+
+        // Merge preset intf zones and custom ones
+        const zones = presetZones.concat(customIntfZones);
+
+        // Custom dragged interference zone graphic
+        if (currentDragZone && currentInteractionMode === InteractionMode.ADD_INTF) {
+          zones.push(currentDragZone);
+        }
+
+        zones.forEach(z => {
+          const r = z.r || (80 + Math.sin(STATE.tick * 0.05) * 8);
+          ctx.beginPath();
+          ctx.arc(z.x, z.y, r, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(255,59,59,0.08)';
+          ctx.fill();
+          ctx.strokeStyle = 'rgba(255,59,59,0.4)';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([8, 4]);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.font = 'bold 11px sans-serif';
+          ctx.fillStyle = 'rgba(255,100,100,0.9)';
+          ctx.fillText('⚡ 强磁干扰区', z.x - 30, z.y - r - 10);
+        });
+      }
+
+      // Draw dragged building block
+      if (currentDragZone && currentInteractionMode === InteractionMode.ADD_BLDG) {
+        ctx.fillStyle = 'rgba(20,40,65,0.7)';
+        ctx.fillRect(currentDragZone.x, currentDragZone.y, currentDragZone.w, currentDragZone.h);
+        ctx.strokeStyle = 'var(--orange)';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 5]);
+        ctx.strokeRect(currentDragZone.x, currentDragZone.y, currentDragZone.w, currentDragZone.h);
+        ctx.setLineDash([]);
+        ctx.font = '10px sans-serif';
+        ctx.fillStyle = 'var(--orange)';
+        ctx.fillText('NEW BLOCK', currentDragZone.x + 5, currentDragZone.y + 15);
+      }
+
+      // Links
+      const RANGE = 160;
+      for (let i = 0; i < uavs.length; i++) {
+        for (let j = i + 1; j < uavs.length; j++) {
+          const d = dist(uavs[i], uavs[j]);
+          if (d > RANGE) continue;
+          const blocked = isBlocked(uavs[i], uavs[j]);
+          const conflict = uavs[i].channel === uavs[j].channel;
+          ctx.beginPath();
+          ctx.moveTo(uavs[i].x, uavs[i].y);
+          ctx.lineTo(uavs[j].x, uavs[j].y);
+          if (blocked) {
+            ctx.strokeStyle = 'rgba(255,170,0,0.35)';
+            ctx.setLineDash([5, 4]);
+          } else if (conflict) {
+            ctx.strokeStyle = 'rgba(255,59,59,0.5)';
+            ctx.setLineDash([]);
+          } else {
+            const alpha = 0.08 + 0.25 * (1 - d / RANGE);
+            ctx.strokeStyle = `rgba(0,242,255,${alpha})`;
+            ctx.setLineDash([]);
+          }
+          ctx.lineWidth = blocked ? 1 : (conflict ? 1.5 : 1);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+      }
+
+      // GCS links
+      uavs.forEach(u => {
+        const gs = groundStations.find(g => g.active && dist(u, g) < g.range);
+        if (gs) {
+          ctx.beginPath();
+          ctx.moveTo(u.x, u.y);
+          ctx.lineTo(gs.x, gs.y);
+          ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+          ctx.lineWidth = 0.8;
+          ctx.setLineDash([3, 6]);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+      });
+
+      // UAVs
+      uavs.forEach(u => {
+        // RTK Drift Effect
+        let uavX = u.x;
+        let uavY = u.y;
+        if (STATE.rtkDrift) {
+          const jitter = Math.sin(STATE.tick * 0.2 + u.id) * 4;
+          uavX += jitter;
+          uavY += (Math.random() - 0.5) * 2;
+
+          // Ghosting
+          ctx.beginPath();
+          ctx.arc(u.x, u.y, 8, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(255,59,59,0.2)';
+          ctx.fill();
+        }
+
+        const color = u.conflict ? '#ff3b3b' : CH_COLORS[u.channel];
+
+        // Energy halo
+        if (STATE.energyMode && u.energy < 30) {
+          ctx.beginPath();
+          ctx.arc(uavX, uavY, 18, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(255,100,0,0.15)';
+          ctx.fill();
+        }
+
+        // Glow
+        ctx.beginPath();
+        ctx.arc(uavX, uavY, 14, 0, Math.PI * 2);
+        ctx.fillStyle = `${color}18`;
+        ctx.fill();
+
+        // Isometric 3D Body
+        ctx.fillStyle = 'rgba(0,0,0,0.5)';
+        ctx.beginPath(); ctx.ellipse(uavX, uavY + 4, 8, 4, 0, 0, Math.PI * 2); ctx.fill();
+
+        ctx.fillStyle = `rgba(30,40,50,0.9)`;
+        ctx.beginPath();
+        ctx.moveTo(uavX - 7, uavY - 2);
+        ctx.lineTo(uavX + 7, uavY - 2);
+        ctx.lineTo(uavX + 7, uavY + 4);
+        ctx.lineTo(uavX - 7, uavY + 4);
+        ctx.fill();
+
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.moveTo(uavX, uavY - 6);
+        ctx.lineTo(uavX + 7, uavY - 2);
+        ctx.lineTo(uavX, uavY + 2);
+        ctx.lineTo(uavX - 7, uavY - 2);
+        ctx.fill();
+
+        // Propeller hint
+        ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        const r = STATE.playing ? STATE.tick : 0;
+        ctx.moveTo(uavX - 7 + Math.cos(r) * 4, uavY - 4 + Math.sin(r) * 2);
+        ctx.lineTo(uavX - 7 - Math.cos(r) * 4, uavY - 4 - Math.sin(r) * 2);
+        ctx.moveTo(uavX + 7 + Math.cos(r + 1) * 4, uavY - 4 + Math.sin(r + 1) * 2);
+        ctx.lineTo(uavX + 7 - Math.cos(r + 1) * 4, uavY - 4 - Math.sin(r + 1) * 2);
+        ctx.stroke();
+
+        // RTK Drift Label
+        if (STATE.rtkDrift) {
+          ctx.font = 'bold 8px sans-serif';
+          ctx.fillStyle = '#ff3b3b';
+          ctx.fillText('RTK LOSS', uavX - 20, uavY - 15);
+        }
+
+        // NLOS indicator
+        if (u.isNLOS) {
+          ctx.beginPath();
+          ctx.arc(u.x, u.y, 9, 0, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(255,170,0,0.8)';
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+        }
+
+        // Label
+        ctx.fillStyle = 'rgba(200,230,245,0.7)';
+        ctx.font = '8px monospace';
+        ctx.fillText(`U${u.id.toString().padStart(2, '0')}`, u.x - 8, u.y - 10);
+
+        // Energy bar if energy mode
+        if (STATE.energyMode) {
+          const bw = 20, bh = 3;
+          ctx.fillStyle = 'rgba(0,0,0,0.5)';
+          ctx.fillRect(u.x - bw / 2, u.y + 8, bw, bh);
+          const ef = u.energy / 100;
+          ctx.fillStyle = ef > 0.3 ? var_green : '#ff3b3b';
+          ctx.fillRect(u.x - bw / 2, u.y + 8, bw * ef, bh);
+        }
+
+        // Prediction ghost if energy/nlos mode
+        if (STATE.nlosEnabled) {
+          ctx.beginPath();
+          ctx.arc(u.x + u.vx * 20, u.y + u.vy * 20, 3, 0, Math.PI * 2);
+          ctx.fillStyle = `${color}30`;
+          ctx.fill();
+        }
+      });
+
+      // GCS nodes
+      groundStations.forEach((gs, idx) => {
+        ctx.fillStyle = gs.active ? 'rgba(255,255,255,0.8)' : 'rgba(255,59,59,0.8)';
+        ctx.beginPath();
+        ctx.rect(gs.x - 8, gs.y - 8, 16, 16);
+        ctx.fill();
+        ctx.strokeStyle = gs.active ? 'white' : 'var(--red)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.fillStyle = gs.active ? 'rgba(200,230,240,0.9)' : 'rgba(255,80,80,0.9)';
+        ctx.font = '8px monospace';
+        ctx.fillText(gs.active ? `GCS${idx + 1}` : 'FAIL', gs.x - 10, gs.y + 20);
+      });
+
+      // Selection UI Highlight
+      if (selectedUav && !selectedUav.failed) {
+        ctx.beginPath();
+        ctx.arc(selectedUav.x, selectedUav.y, 22, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4, 4]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Render 3D hover panel
+        ctx.fillStyle = 'rgba(10, 20, 35, 0.95)';
+        ctx.strokeStyle = 'var(--cyan)';
+        ctx.lineWidth = 1;
+        const panelX = selectedUav.x + 15;
+        const panelY = selectedUav.y - 70;
+        ctx.fillRect(panelX, panelY, 130, 80);
+        ctx.strokeRect(panelX, panelY, 130, 80);
+
+        // Panel header
+        ctx.fillStyle = 'white';
+        ctx.font = 'bold 9px sans-serif';
+        ctx.fillText(`UAV_ID: ${String(selectedUav.id).padStart(2, '0')}`, panelX + 5, panelY + 12);
+        ctx.fillStyle = selectedUav.conflict ? '#ff3b3b' : var_green;
+        ctx.fillText(selectedUav.conflict ? 'COLLISION' : 'SECURE', panelX + 70, panelY + 12);
+
+        // Panel line
+        ctx.beginPath();
+        ctx.moveTo(panelX + 2, panelY + 18);
+        ctx.lineTo(panelX + 128, panelY + 18);
+        ctx.strokeStyle = 'rgba(0, 242, 255, 0.3)';
+        ctx.stroke();
+
+        // Details
+        ctx.fillStyle = 'rgba(200, 230, 255, 0.9)';
+        ctx.font = '8px monospace';
+        ctx.fillText(`C(ch)  : ${CHANNELS[selectedUav.channel]}`, panelX + 5, panelY + 30);
+        ctx.fillText(`B(bat) : ${selectedUav.energy.toFixed(1)}%`, panelX + 5, panelY + 42);
+        ctx.fillText(`X/Y(m) : [${Math.round((selectedUav.x / W) * 300)}, ${Math.round(((H - selectedUav.y) / H) * 300)}]`, panelX + 5, panelY + 54);
+
+        ctx.fillStyle = 'var(--cyan)';
+        ctx.fillText(`Tx_Pwr : ${selectedUav.txPower.toFixed(1)} dBm`, panelX + 5, panelY + 66);
+        ctx.fillText(`Task   : ${selectedUav.type === 'video' ? '📺高清图传' : '🕹️飞控控制'}`, panelX + 5, panelY + 76);
+
+        // Link to UAV
+        ctx.beginPath();
+        ctx.moveTo(selectedUav.x, selectedUav.y - 12);
+        ctx.lineTo(panelX, panelY + 40);
+        ctx.strokeStyle = 'var(--cyan)';
+        ctx.stroke();
+      }
+
+      // End follow view transform
+      ctx.restore();
+
+      // AB Split View Overlay
+      if (STATE.viewMode === 'split') {
+        ctx.fillStyle = 'rgba(255,59,59,0.05)';
+        ctx.fillRect(0, 0, W / 2, H);
+        ctx.beginPath();
+        ctx.moveTo(W / 2, 0);
+        ctx.lineTo(W / 2, H);
+        ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([10, 10]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.font = '14px sans-serif';
+        ctx.fillStyle = 'rgba(255,100,100,0.85)';
+        ctx.fillText('🔴 传统无调度模式 (PDR低/冲突多)', 15, 25);
+        ctx.fillStyle = 'rgba(0,242,255,0.85)';
+        ctx.fillText('🟢 翼网智能全局分配 (零冲突/自适应)', W / 2 + 15, 25);
+      }
+    }
+
+    function clearBuildings() {
+      buildings = [];
+      addLog('warn', '场景编辑器：已清空所有建筑物');
+      runGraphColoring();
+    }
+
+    function clearIntf() {
+      customIntfZones = [];
+      STATE.interferenceLevel = 0;
+      document.getElementById('intf-slider').value = 0;
+      document.getElementById('intf-label').textContent = '无';
+      addLog('warn', '场景编辑器：已清空所有干扰源');
+    }
+
+    function exportScene() {
+      const config = {
+        areaSize: 300, // Matching C++ side
+        buildings: buildings.map(b => ({
+          x: Math.round((b.x / W) * 300),
+          y: Math.round(((H - (b.y + b.h)) / H) * 300), // Coordinate flip for coordinate systems
+          w: Math.round((b.w / W) * 300),
+          h: Math.round((b.h / H) * 300),
+          name: b.name
+        })),
+        gcs: groundStations.map(gs => ({
+          x: Math.round((gs.x / W) * 300),
+          y: Math.round(((H - gs.y) / H) * 300),
+          range: Math.round((gs.range / W) * 300)
+        }))
+      };
+      const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `scene_config_${Date.now()}.json`;
+      a.click();
+      addLog('good', '场景已成功导出为 JSON，可直接用于 C++ 后端配置');
+    }
+
+    const var_green = '#00ff88'; // css var workaround for canvas
+
+    // ================================================================
+    // PHYSICS UPDATE
+    // ================================================================
+    function updatePhysics() {
+      STATE.tick++;
+      const speed = STATE.energyMode ? 0.8 : 1.2;
+      uavs.forEach(u => {
+        if (u.failed) return;
+        u.x += u.vx * speed;
+        u.y += u.vy * speed;
+        if (u.x < 10 || u.x > W - 10) u.vx *= -1;
+        if (u.y < 10 || u.y > H - 10) u.vy *= -1;
+
+        // Energy drain in energy mode
+        if (STATE.energyMode) {
+          u.energy = Math.max(5, u.energy - 0.02);
+          if (u.energy < 30 && u.txPower > 12) { u.txPower -= 0.1; }
+        }
+
+        // Check NLOS
+        u.isNLOS = buildings.some(b =>
+          u.x > b.x && u.x < b.x + b.w && u.y > b.y && u.y < b.y + b.h
+        );
+      });
+    }
+
+    // ================================================================
+    // INTERACTION HANDLERS (Canvas)
+    // ================================================================
+    function setInteractionMode(mode) {
+      currentInteractionMode = mode;
+      canvas.style.cursor = mode !== InteractionMode.NONE ? 'crosshair' : 'default';
+      if (mode === InteractionMode.ADD_INTF) addLog('info', '沙盘模式：请在雷达图上拖动以绘制强磁干扰辐射区');
+      if (mode === InteractionMode.ADD_BLDG) addLog('info', '沙盘模式：请在雷达图上拖动以空投新建建筑物(NLOS)');
+    }
+
+    function tbSetMode(mode) {
+      document.getElementById('tb-bldg').classList.remove('active');
+      document.getElementById('tb-intf').classList.remove('active');
+      if (mode === 'bldg') {
+        setInteractionMode(InteractionMode.ADD_BLDG);
+        document.getElementById('tb-bldg').classList.add('active');
+      } else if (mode === 'intf') {
+        setInteractionMode(InteractionMode.ADD_INTF);
+        document.getElementById('tb-intf').classList.add('active');
+      }
+    }
+
+    canvas.addEventListener('mousedown', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      if (currentInteractionMode !== InteractionMode.NONE) {
+        isDragging = true;
+        dragStart = { x, y };
+        return;
+      }
+
+      // We still handle shift-click or double click to KILL the UAV
+      if (e.shiftKey || e.ctrlKey) {
+        const clickedUav = uavs.find(u => !u.failed && dist(u, { x, y }) < 20);
+        if (clickedUav) {
+          clickedUav.failed = true;
+          if (selectedUav === clickedUav) selectedUav = null;
+          addLog('crit', `== 节点灾难 == 目标 UAV_${String(clickedUav.id).padStart(2, '0')} 发生硬故障坠机！网络拓扑残缺`);
+          addLog('warn', `启动智能自愈引擎 · 其余节点正重组图着色路由表...`);
+          runGraphColoring();
+        }
+      }
+    });
+
+    canvas.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      if (currentInteractionMode === InteractionMode.ADD_INTF) {
+        currentDragZone = { x: dragStart.x, y: dragStart.y, r: dist(dragStart, { x, y }) };
+      } else if (currentInteractionMode === InteractionMode.ADD_BLDG) {
+        currentDragZone = {
+          x: Math.min(dragStart.x, x), y: Math.min(dragStart.y, y),
+          w: Math.abs(x - dragStart.x), h: Math.abs(y - dragStart.y)
+        };
+      }
+    });
+
+    canvas.addEventListener('mouseup', () => {
+      if (!isDragging) return;
+      isDragging = false;
+
+      if (currentInteractionMode === InteractionMode.ADD_INTF && currentDragZone) {
+        STATE.interferenceLevel = Math.max(1, STATE.interferenceLevel); // ensure level is at least 1
+        customIntfZones.push(currentDragZone);
+        addLog('crit', `注入自定义范围干扰源区 (R=${Math.round(currentDragZone.r)}m) · 读取特定灾难分析模型集 JSON_INTF_CUST...`);
+      } else if (currentInteractionMode === InteractionMode.ADD_BLDG && currentDragZone) {
+        buildings.push({ ...currentDragZone, name: "临时空投建筑" });
+        addLog('warn', `成功部署新建构筑物物理模型 · NLOS 遮挡视线发生大面积刷新`);
+        currentInteractionMode = InteractionMode.NONE;
+        currentDragZone = null;
+        canvas.style.cursor = 'default';
+        runGraphColoring();
+      }
+    });
+
+    let selectedUav = null;
+
+    canvas.addEventListener('click', (e) => {
+      if (isDragging || currentInteractionMode !== InteractionMode.NONE) return; // Prevent triggering if dragging
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      // Select UAV for info view
+      const clickedUav = uavs.find(u => dist(u, { x, y }) < 25);
+      if (clickedUav) {
+        selectedUav = (selectedUav === clickedUav) ? null : clickedUav; // Toggle selection
+        if (selectedUav) addLog('info', `操作员聚焦查看 UAV_${String(selectedUav.id).padStart(2, '0')} 详细参数`);
+      } else {
+        selectedUav = null; // Click empty space to deselect
+      }
+      draw(); // Force draw to show UI instantly
+    });
+
+    // ================================================================
+    // UPDATE METRICS
+    // ================================================================
+    function updateMetrics() {
+      const activeUavs = uavs.filter(u => !u.failed);
+      const n = activeUavs.length;
+      if (n === 0) return; // Prevent div by 0
+
+      const conflicts = activeUavs.filter(u => u.conflict).length;
+      const nloses = activeUavs.filter(u => u.isNLOS).length;
+      const links = activeUavs.reduce((acc, u, i) => acc + activeUavs.slice(i + 1).filter(v => dist(u, v) < 160 && !isBlocked(u, v)).length, 0);
+      const maxLinks = n * (n - 1) / 2;
+      const connectivity = maxLinks > 0 ? (links / maxLinks) : 0;
+
+      const pdr = Math.max(0.6, 0.97 - conflicts * 0.04 - STATE.interferenceLevel * 0.06 - nloses * 0.02);
+      const pdrBase = Math.max(0.3, 0.72 - STATE.interferenceLevel * 0.12);
+      const delay = 20 + conflicts * 8 + STATE.interferenceLevel * 12 + nloses * 5;
+      const throughput = (n * pdr * (STATE.energyMode ? 0.7 : 1.0) * 1.2).toFixed(1);
+      const health = Math.round(pdr * 100);
+
+      // Ring
+      const c = 2 * Math.PI * 55;
+      document.getElementById('ring-fg').style.strokeDashoffset = c * (1 - health / 100);
+      document.getElementById('health-val').textContent = health + '%';
+      document.getElementById('health-val').style.color = health > 85 ? '#00ff88' : health > 70 ? '#ffaa00' : '#ff3b3b';
+
+      document.getElementById('m-pdr').textContent = (pdr * 100).toFixed(1) + '%';
+      document.getElementById('m-delay').textContent = delay.toFixed(0) + ' ms';
+      document.getElementById('m-tp').textContent = throughput + ' Mbps';
+      document.getElementById('m-link').textContent = links;
+
+      // Calculate partitions (connected components)
+      const visited = new Set();
+      let partitions = 0;
+      for (const u of activeUavs) {
+        if (!visited.has(u.id)) {
+          partitions++;
+          const q = [u];
+          visited.add(u.id);
+          while (q.length > 0) {
+            const curr = q.shift();
+            activeUavs.forEach(v => {
+              if (!visited.has(v.id) && dist(curr, v) < 160 && !isBlocked(curr, v)) {
+                visited.add(v.id);
+                q.push(v);
+              }
+            });
+          }
+        }
+      }
+
+      document.getElementById('t-conn').textContent = (connectivity * 100).toFixed(1) + '%';
+      document.getElementById('t-part').textContent = partitions;
+      document.getElementById('t-part').style.color = partitions > 1 ? 'var(--red)' : '#00ff88';
+
+      document.getElementById('topo-chip').innerHTML = `拓扑连通性: <strong>${(connectivity * 100).toFixed(1)}% | 子指: ${partitions}</strong>`;
+      document.getElementById('conflict-chip').innerHTML = `同频冲突: <strong style="color:${conflicts > 0 ? '#ff3b3b' : '#00ff88'}">${conflicts}</strong>`;
+
+      document.getElementById('q-avail').textContent = (pdr * 100).toFixed(1) + '%';
+      document.getElementById('q-p99').textContent = (delay * 2.5).toFixed(0) + ' ms';
+      document.getElementById('q-alloc').textContent = STATE.interferenceLevel > 0 ? (2.1 + Math.random() * 0.5).toFixed(1) + ' ms' : '1.2 ms';
+      const avgTxPwr = activeUavs.reduce((sum, u) => sum + u.txPower, 0) / n;
+      document.getElementById('q-ee').textContent = avgTxPwr.toFixed(1) + ' dBm';
+
+      // Update Types List
+      const videoCount = activeUavs.filter(u => u.type === 'video').length;
+      document.getElementById('count-video').textContent = videoCount;
+      document.getElementById('count-control').textContent = n - videoCount;
+
+      // Charts History
+      pdrHistory.opt.push(pdr * 100);
+      pdrHistory.base.push(pdrBase * 100);
+      tpHistory.opt.push(parseFloat(throughput));
+      tpHistory.base.push(parseFloat(throughput) * (0.6 - STATE.interferenceLevel * 0.15));
+      if (pdrHistory.opt.length > PDR_MAX_POINTS) { pdrHistory.opt.shift(); pdrHistory.base.shift(); tpHistory.opt.shift(); tpHistory.base.shift(); }
+      drawPDRChart();
+      drawTPChart();
+
+      // Spectrum
+      updateSpectrum();
+
+      // UAV list
+      updateUAVList();
+    }
+
+    function drawPDRChart() {
+      const c = document.getElementById('pdr-lines');
+      c.width = c.parentElement.clientWidth;
+      c.height = 110;
+      const cx = c.getContext('2d');
+      cx.clearRect(0, 0, c.width, c.height);
+
+      function drawLine(data, color, fill) {
+        if (data.length < 2) return;
+        cx.beginPath();
+        data.forEach((v, i) => {
+          const x = i / (PDR_MAX_POINTS - 1) * c.width;
+          const y = c.height - (v / 100) * c.height;
+          i === 0 ? cx.moveTo(x, y) : cx.lineTo(x, y);
+        });
+        if (fill) {
+          cx.lineTo(c.width, c.height); cx.lineTo(0, c.height); cx.closePath();
+          cx.fillStyle = `${color}18`; cx.fill();
+        }
+        cx.strokeStyle = color; cx.lineWidth = 1.5; cx.stroke();
+      }
+
+      // Grid lines
+      [80, 90, 100].forEach(v => {
+        cx.strokeStyle = 'rgba(255,255,255,0.05)'; cx.lineWidth = 1;
+        const y = c.height - (v / 100) * c.height;
+        cx.beginPath(); cx.moveTo(0, y); cx.lineTo(c.width, y); cx.stroke();
+        cx.fillStyle = 'rgba(150,180,200,0.4)'; cx.font = '8px monospace';
+        cx.fillText(v + '%', 2, y - 2);
+      });
+
+      drawLine(pdrHistory.base, 'rgba(100,120,140,0.6)', false);
+      drawLine(pdrHistory.opt, '#00f2ff', true);
+
+      // Legend
+      cx.fillStyle = 'rgba(0,242,255,0.9)'; cx.font = '8px sans-serif';
+      cx.fillText('── 优化后', c.width - 80, 12);
+      cx.fillStyle = 'rgba(100,130,160,0.8)';
+      cx.fillText('── 基准线', c.width - 80, 24);
+    }
+
+    function drawTPChart() {
+      const c = document.getElementById('tp-lines');
+      if (!c) return;
+      c.width = c.parentElement.clientWidth;
+      c.height = 110;
+      const cx = c.getContext('2d');
+      cx.clearRect(0, 0, c.width, c.height);
+
+      function drawLine(data, color, fill) {
+        if (data.length < 2) return;
+        const maxVal = Math.max(300, ...data) * 1.1; // dynamic scale
+        cx.beginPath();
+        data.forEach((v, i) => {
+          const x = i / (PDR_MAX_POINTS - 1) * c.width;
+          const y = c.height - (v / maxVal) * c.height;
+          i === 0 ? cx.moveTo(x, y) : cx.lineTo(x, y);
+        });
+        if (fill) {
+          cx.lineTo(c.width, c.height); cx.lineTo(0, c.height); cx.closePath();
+          cx.fillStyle = `${color}25`; cx.fill();
+        }
+        cx.strokeStyle = color; cx.lineWidth = 1.5; cx.stroke();
+      }
+
+      const maxVal = Math.max(300, ...tpHistory.opt) * 1.1;
+      // Grid lines
+      [maxVal * 0.33, maxVal * 0.66, maxVal * 0.99].forEach(v => {
+        cx.strokeStyle = 'rgba(255,255,255,0.05)'; cx.lineWidth = 1;
+        const y = c.height - (v / maxVal) * c.height;
+        cx.beginPath(); cx.moveTo(0, y); cx.lineTo(c.width, y); cx.stroke();
+        cx.fillStyle = 'rgba(150,180,200,0.4)'; cx.font = '8px monospace';
+        cx.fillText(v.toFixed(0) + 'M', 2, y - 2);
+      });
+
+      drawLine(tpHistory.base, 'rgba(100,120,140,0.6)', false);
+      drawLine(tpHistory.opt, '#a855f7', true); // Purple for throughput
+    }
+
+    function updateSpectrum() {
+      const counts = [0, 0, 0, 0, 0, 0];
+      uavs.filter(u => !u.failed).forEach(u => { counts[u.channel % 6]++; });
+      // spread across 6 visual slots for aesthetics
+      const spGrid = document.getElementById('spectrum-grid');
+      spGrid.innerHTML = '';
+      for (let i = 0; i < 6; i++) {
+        const ch = i % 3;
+        const count = i < 3 ? counts[i] : Math.max(0, counts[i] || 0);
+        const heightPct = Math.min(95, (count / uavs.length) * 200);
+        const color = CH_COLORS[ch];
+        spGrid.innerHTML += `
+      <div class="sp-bar-wrap">
+        <div class="sp-bar-bg">
+          <div class="sp-bar-fill" style="height:${heightPct}%;background:${color};opacity:0.7;"></div>
+        </div>
+        <div class="sp-label" style="color:${color}">CH${i + 1}</div>
+        <div class="sp-label">${count}</div>
+      </div>`;
+      }
+    }
+
+    function updateUAVList() {
+      const list = document.getElementById('uav-list');
+      list.innerHTML = '';
+      uavs.slice(0, 12).forEach(u => {
+        if (u.failed) return;
+        const color = u.conflict ? '#ff3b3b' : CH_COLORS[u.channel];
+        const eg = STATE.energyMode ? u.energy.toFixed(0) : '--';
+        const egColor = u.energy > 50 ? '#00ff88' : u.energy > 25 ? '#ffaa00' : '#ff3b3b';
+        list.innerHTML += `
+      <div class="uav-item">
+        <span class="uav-id">U${u.id.toString().padStart(2, '0')}</span>
+        <div class="energy-bar-wrap"><div class="energy-bar" style="width:${u.energy}%;background:${egColor}"></div></div>
+        <span class="ch-badge ch${u.channel}" style="background:${CH_BCOLORS[u.channel]};color:${color}">${CHANNELS[u.channel]}</span>
+        <span style="color:${egColor};font-size:0.65rem">${eg}%</span>
+        <span style="color:${u.isNLOS ? '#ffaa00' : '#00ff88'};font-size:0.65rem">${u.isNLOS ? 'NLOS' : 'LOS'}</span>
+      </div>`;
+      });
+      document.getElementById('active-count').textContent = `${uavs.length} / ${STATE.uavCount}`;
+    }
+
+    // ================================================================
+    // LOG SYSTEM
+    // ================================================================
+    const LOG_MSGS = {
+      info: [
+        (i) => `UAV_${String(i).padStart(2, '0')} 完成航段 · 位置上报正常`,
+        () => `图着色算法完成第 ${STATE.algoRuns} 次全局重分配 · 0 冲突`,
+        () => `RTK 轨迹数据帧同步 · 时戳偏差 +${(Math.random() * 2).toFixed(1)}ms`,
+        () => `拓扑邻接矩阵更新 · 活跃链路 ${uavs.reduce((a, u, i) => a + uavs.slice(i + 1).filter(v => dist(u, v) < 160).length, 0)} 条`,
+        () => `空地协同模式 · GCS1 与 ${2 + Math.floor(Math.random() * 4)} 架节点维持连接`,
+      ],
+      warn: [
+        () => `UAV_${String(Math.floor(Math.random() * STATE.uavCount)).padStart(2, '0')} 进入建筑物遮挡区域 [NLOS] · 触发频点跳变`,
+        () => `信道 CH${1 + Math.floor(Math.random() * 3)} 使用率超过 80% · 建议负载均衡`,
+        () => `检测到潜在同频干扰 · 受影响节点 ${Math.floor(Math.random() * 4) + 1} 架`,
+        () => `UAV_${String(Math.floor(Math.random() * STATE.uavCount)).padStart(2, '0')} 电量低于 30% · 切换省电模式`,
+      ],
+      crit: [
+        () => `!!  干扰源注入  !! 全域 SNR 下降 ${(State_IntfLvl() * 12).toFixed(0)} dB · 紧急重分配`,
+        () => `GCS 失联告警 · 节点切换至空空自组网模式`,
+        () => `(Tip) 可通过 Shift+Click 在雷达图上强行摧毁节点测试网络韧性`,
+      ],
+      good: [
+        () => `算法完成自愈 · PDR 恢复至 ${(90 + Math.random() * 8).toFixed(1)}%`,
+        () => `新优化轮次完成 · 全网同频冲突归零`,
+        () => `能耗感知调度生效 · 平均发射功率降低 ${(8 + Math.random() * 6).toFixed(1)}%`,
+      ]
+    };
+
+    function State_IntfLvl() { return STATE.interferenceLevel || 1; }
+
+    function addLog(type, msg) {
+      STATE.logCount++;
+      document.getElementById('log-count').textContent = `${STATE.logCount} 条事件`;
+      const t = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+      const div = document.createElement('div');
+      div.className = `log-entry ${type}`;
+      div.textContent = `[${t}] ${msg}`;
+      const scroll = document.getElementById('log-scroll');
+      scroll.prepend(div);
+      if (scroll.children.length > 40) scroll.removeChild(scroll.lastChild);
+    }
+
+    function autoLog() {
+      const r = Math.random();
+      let type, fn;
+      if (r < 0.6) { type = 'info'; fn = LOG_MSGS.info[Math.floor(Math.random() * LOG_MSGS.info.length)]; }
+      else if (r < 0.85) { type = 'warn'; fn = LOG_MSGS.warn[Math.floor(Math.random() * LOG_MSGS.warn.length)]; }
+      else { type = 'good'; fn = LOG_MSGS.good[Math.floor(Math.random() * LOG_MSGS.good.length)]; }
+      addLog(type, fn(Math.floor(Math.random() * STATE.uavCount)));
+    }
+
+    // ================================================================
+    // CONTROL HANDLERS
+    // ================================================================
+    function injectInterference() {
+      STATE.interferenceLevel = Math.min(3, STATE.interferenceLevel + 1);
+      document.getElementById('intf-slider').value = STATE.interferenceLevel;
+      updateIntfLabel();
+      addLog('crit', `!!  手动注入 Level-${STATE.interferenceLevel} 干扰源  !! 全域频谱重排触发`);
+      const badge = document.getElementById('event-badge');
+      badge.style.display = 'block';
+      runGraphColoring();
+      addLog('good', `图着色算法完成紧急重排 · 已消解同频冲突`);
+      setTimeout(() => { badge.style.display = 'none'; }, 3200);
+    }
+
+    function toggleNLOS() {
+      STATE.nlosEnabled = !STATE.nlosEnabled;
+      const btn = document.getElementById('nlos-btn');
+      btn.textContent = STATE.nlosEnabled ? '关闭遮挡感知' : '启用遮挡感知';
+      btn.classList.toggle('active', STATE.nlosEnabled);
+      addLog('info', `建筑物遮挡感知模型: ${STATE.nlosEnabled ? '✓ 启用' : '✗ 停用'}`);
+    }
+
+    function toggleGCS() {
+      STATE.gcsFailure = !STATE.gcsFailure;
+      groundStations.forEach(g => g.active = !STATE.gcsFailure);
+      const btn = document.getElementById('gcs-btn');
+      btn.textContent = STATE.gcsFailure ? '恢复地面站' : '地面站故障';
+      btn.classList.toggle('danger', !STATE.gcsFailure);
+      if (STATE.gcsFailure) {
+        addLog('crit', 'GCS1 & GCS2 模拟失效 · 全队切换至 Ad-Hoc 自愈模式');
+        addLog('warn', `${Math.floor(STATE.uavCount * 0.6)} 架节点重建空空拓扑链路`);
+      } else {
+        addLog('good', '地面站信号恢复 · 节点逐步回归蜂窝拓扑');
+      }
+    }
+
+    function toggleEnergy(btn) {
+      STATE.energyMode = !STATE.energyMode;
+      btn.textContent = `🔋 能耗模拟: ${STATE.energyMode ? '开' : '关'}`;
+      btn.classList.toggle('active', STATE.energyMode);
+      if (STATE.energyMode) {
+        addLog('warn', '能耗感知调度模式激活 · 节点发射功率开始自适应降低');
+      } else {
+        uavs.forEach(u => { u.txPower = 20; u.energy = 60 + Math.random() * 40; });
+        addLog('info', '能耗模式停用 · 节点恢复满功率运行');
+      }
+    }
+
+    function toggleRTKDrift(btn) {
+      STATE.rtkDrift = !STATE.rtkDrift;
+      btn.textContent = `📍 RTK漂移: ${STATE.rtkDrift ? '激活' : '关'}`;
+      btn.style.color = STATE.rtkDrift ? 'var(--red)' : '';
+      if (STATE.rtkDrift) {
+        addLog('crit', '卫星信号多径效应模拟启动 · 定位精度下降至 1.2m · 开启抗漂移冗余调度');
+        document.getElementById('lab-rtk-err').textContent = '1.24m';
+        document.getElementById('lab-rtk-err').style.color = 'var(--red)';
+        document.getElementById('lab-rtk-status').textContent = '⚠️ 多径效应干扰';
+        document.getElementById('lab-rtk-status').style.color = 'var(--red)';
+      } else {
+        addLog('good', 'RTK 定位精度恢复正常 · 位置服务同步成功');
+        document.getElementById('lab-rtk-err').textContent = '0.02m';
+        document.getElementById('lab-rtk-err').style.color = 'var(--cyan)';
+        document.getElementById('lab-rtk-status').textContent = '✔ 高精度同步中';
+        document.getElementById('lab-rtk-status').style.color = 'var(--green)';
+      }
+    }
+
+    function toggleLab() {
+      const overlay = document.getElementById('lab-overlay');
+      const isActive = overlay.classList.toggle('active');
+      if (isActive) renderRadar();
+    }
+
+    function renderRadar() {
+      const container = document.getElementById('radar-box');
+      const size = 300;
+      const center = size / 2;
+      const r_max = 120;
+      const labels = ['Throughput', 'Min Delay', 'Max PDR', 'Stability', 'Fairness'];
+
+      const datasets = [
+        { name: 'Graph Coloring', color: 'rgba(0,242,255,0.7)', fill: 'rgba(0,242,255,0.2)', vals: [0.92, 0.88, 0.95, 0.85, 0.90] },
+        { name: 'Greedy', color: 'rgba(168,85,247,0.7)', fill: 'rgba(168,85,247,0.2)', vals: [0.75, 0.65, 0.82, 0.60, 0.70] },
+        { name: 'Static', color: 'rgba(74,122,155,0.5)', fill: 'rgba(74,122,155,0.1)', vals: [0.45, 0.40, 0.55, 0.50, 0.30] }
+      ];
+
+      let svg = `<svg width="${size}" height="${size}" class="radar-svg">`;
+      for (let i = 1; i <= 5; i++) {
+        const r = (r_max / 5) * i;
+        let points = "";
+        for (let j = 0; j < 5; j++) {
+          const angle = (Math.PI * 2 / 5) * j - Math.PI / 2;
+          points += `${center + Math.cos(angle) * r},${center + Math.sin(angle) * r} `;
+        }
+        svg += `<polygon points="${points}" fill="none" stroke="rgba(255,255,255,0.05)" stroke-width="1" />`;
+      }
+
+      labels.forEach((l, i) => {
+        const angle = (Math.PI * 2 / 5) * i - Math.PI / 2;
+        const x = center + Math.cos(angle) * r_max;
+        const y = center + Math.sin(angle) * r_max;
+        svg += `<line x1="${center}" y1="${center}" x2="${x}" y2="${y}" stroke="rgba(255,255,255,0.1)" />`;
+        svg += `<text x="${x + Math.cos(angle) * 15}" y="${y + Math.sin(angle) * 15}" fill="var(--text-dim)" font-size="9" text-anchor="middle" dominant-baseline="middle">${l}</text>`;
+      });
+
+      datasets.forEach(ds => {
+        let points = "";
+        ds.vals.forEach((v, i) => {
+          const angle = (Math.PI * 2 / 5) * i - Math.PI / 2;
+          const r = v * r_max;
+          points += `${center + Math.cos(angle) * r},${center + Math.sin(angle) * r} `;
+        });
+        svg += `<polygon points="${points}" fill="${ds.fill}" stroke="${ds.color}" stroke-width="2" />`;
+      });
+      svg += `</svg>`;
+      container.innerHTML = svg;
+    }
+
+    function stressTest() {
+      addLog('crit', '== 极端压力测试 启动 == 同时注入干扰 + 地面站失效 + 机群规模扩展');
+      STATE.interferenceLevel = 3;
+      STATE.gcsFailure = true;
+      groundStations.forEach(g => g.active = false);
+      STATE.energyMode = true;
+      STATE.uavCount = 30;
+      document.getElementById('uav-slider').value = 30;
+      document.getElementById('uav-count-label').textContent = '30';
+      document.getElementById('intf-slider').value = 3;
+      updateIntfLabel();
+      initUAVs();
+      setTimeout(() => {
+        runGraphColoring();
+        addLog('good', '压力测试自愈完成 · DSATUR重分配耗时 < 5ms · 系统韧性验证通过');
+      }, 2000);
+    }
+
+    function resetSim() {
+      pdrHistory = { opt: [], base: [] };
+      tpHistory = { opt: [], base: [] };
+      STATE.tick = 0;
+      STATE.algoRuns = 0;
+      STATE.interferenceLevel = 0;
+      STATE.gcsFailure = false;
+      STATE.energyMode = false;
+      STATE.uavCount = 15;
+      customIntfZones = [];
+      groundStations.forEach(g => g.active = true);
+      document.getElementById('uav-slider').value = 15;
+      document.getElementById('uav-count-label').textContent = '15';
+      document.getElementById('intf-slider').value = 0;
+      document.getElementById('energy-btn').classList.remove('active');
+      document.getElementById('nlos-btn').classList.add('active');
+      STATE.nlosEnabled = true;
+      updateIntfLabel();
+      pdrHistory = { opt: [], base: [] };
+      initUAVs();
+      addLog('info', '== 仿真环境重置 == 参数归默认 · 节点重初始化');
+    }
+
+    function updateIntfLabel() {
+      const labels = ['无', '低', '中', '高'];
+      document.getElementById('intf-label').textContent = labels[STATE.interferenceLevel];
+    }
+
+    // Slider events
+    document.getElementById('uav-slider').addEventListener('input', function () {
+      STATE.uavCount = parseInt(this.value);
+      document.getElementById('uav-count-label').textContent = STATE.uavCount;
+      initUAVs();
+      addLog('info', `机群规模调整为 ${STATE.uavCount} 架 · 重新执行 DSATUR 分配`);
+    });
+    document.getElementById('intf-slider').addEventListener('input', function () {
+      STATE.interferenceLevel = parseInt(this.value);
+      updateIntfLabel();
+    });
+
+    // ================================================================
+    // CLOCK
+    // ================================================================
+    function updateClock() {
+      document.getElementById('sys-clock').textContent = new Date().toLocaleString('zh-CN');
+    }
+
+    // Timeline and Playback Controls
+    function togglePlay() {
+      STATE.playing = !STATE.playing;
+      document.getElementById('play-pause-btn').innerHTML = STATE.playing ? '⏸' : '▶';
+      document.getElementById('play-pause-btn').style.color = STATE.playing ? 'var(--cyan)' : 'var(--orange)';
+    }
+    function changeSpeed(v) { STATE.speed = parseInt(v); }
+    function changeView(v) {
+      STATE.viewMode = v;
+      if (v === 'split') addLog('warn', '切换至 AB 屏极化展示：评估 [传统无调度] 与 [Wing-Net 智能调度] 性能');
+      else if (v === 'follow') addLog('info', '切换至 抵近定点追踪模式 · 强锁定 UAV_00');
+      else addLog('info', '切换至 默认全域上帝统筹视角');
+    }
+
+    document.getElementById('time-slider').addEventListener('input', function () {
+      // Seek timeline manipulates slightly to simulate scrubbing data
+      uavs.forEach(u => {
+        u.x += (Math.random() - 0.5) * 15;
+        u.y += (Math.random() - 0.5) * 15;
+      });
+      runGraphColoring();
+    });
+
+    // ================================================================
+    // MAIN LOOP
+    // ================================================================
+    let frameCount = 0;
+    function mainLoop() {
+      if (STATE.playing) {
+        for (let s = 0; s < STATE.speed; s++) {
+          frameCount++;
+          updatePhysics();
+
+          // Update time slider
+          if (frameCount % 4 === 0) {
+            let ts = document.getElementById('time-slider');
+            if (parseInt(ts.value) < parseInt(ts.max)) ts.value = parseInt(ts.value) + 1;
+            else ts.value = 0;
+          }
+
+          if (frameCount % 90 === 0) {
+            runGraphColoring();
+            updateMetrics();
+          }
+          if (frameCount % 150 === 0) {
+            autoLog();
+          }
+        }
+      }
+
+      draw();
+      requestAnimationFrame(mainLoop);
+    }
+
+    // ================================================================
+    // INIT
+    // ================================================================
+    updateClock();
+    setInterval(updateClock, 1000);
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+
+    // Boot log sequence
+    const bootMsgs = [
+      ['info', 'Wing-Net Omni Hub v2.0 · 系统启动'],
+      ['info', 'RTK 轨迹引擎加载完成 · 支持 WGS-84 → ENU 实时转换'],
+      ['info', 'ns-3 仿真内核 · 加载 Nakagami 衰落模型'],
+      ['info', 'DSATUR 图着色资源调度引擎就绪 · 空间复杂度 O(N²)'],
+      ['info', '建筑物遮挡感知 (NLOS) 模型初始化 · 5 个 CBD 障碍体已加载'],
+      ['info', '能耗感知调度模块就绪 · 监测阈值: 30%'],
+      ['good', '全系统在线 · 开始 15 架 UAV 初始化部署'],
+    ];
+    bootMsgs.forEach((m, i) => setTimeout(() => addLog(m[0], m[1]), i * 400));
+    setTimeout(() => { runGraphColoring(); updateMetrics(); }, bootMsgs.length * 400);
+    setTimeout(() => mainLoop(), (bootMsgs.length + 1) * 400);
+
+    document.getElementById('nlos-btn').classList.add('active');
+  </script>
+</body>
+
+</html>

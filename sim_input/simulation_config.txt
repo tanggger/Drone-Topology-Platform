@@ -1,0 +1,24 @@
+# ns-3仿真配置文件
+# 从RTK数据生成
+
+[仿真参数]
+节点数量 = 20
+仿真时长 = 99.8 秒
+平均速度 = 13.31 m/s
+
+[空间范围]
+X范围 = -34.3 - 1344.1 米
+Y范围 = -172.4 - 0.3 米  
+Z范围 = -24.3 - 25.5 米
+
+[建议的无线参数]
+传输功率 = 33 dBm
+接收灵敏度 = -93 dBm
+通信范围 = ~150-200 米
+信道模型 = YansWifiChannel + ThreeLogDistancePropagationLoss
+
+[文件说明]
+- uav_*.wp: 各无人机的waypoint文件
+- mobility_trace.txt: 统一的trace文件
+- mobility_setup.cpp: C++代码片段
+- simulation_config.txt: 本配置文件

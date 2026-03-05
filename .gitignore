@@ -1,0 +1,43 @@
+# Build artifacts
+build/
+*.so
+*.a
+*.o
+*.pch
+*.gch
+
+# Benchmark output files (large data files)
+benchmark/*/flowmon.xml
+benchmark/*/node-transmissions.csv
+benchmark/*/node-positions.csv
+benchmark/*/simulation.log
+
+# CMake build files
+CMakeFiles/
+cmake_install.cmake
+CMakeCache.txt
+*.cmake
+!build-support/**/*.cmake
+
+# Output directories
+output/
+sim_output/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+

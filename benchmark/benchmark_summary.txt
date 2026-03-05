@@ -1,0 +1,63 @@
+RTK Benchmark 数据集汇总
+====================================
+
+数据集结构:
+benchmark/
+├── cross_Easy/          # Cross 编队 - 简单模式
+├── cross_Moderate/      # Cross 编队 - 中等模式
+├── cross_Hard/          # Cross 编队 - 困难模式
+├── line_Easy/           # Line 编队 - 简单模式
+├── line_Moderate/       # Line 编队 - 中等模式
+├── line_Hard/           # Line 编队 - 困难模式
+├── triangle_Easy/       # Triangle 编队 - 简单模式
+├── triangle_Moderate/   # Triangle 编队 - 中等模式
+├── triangle_Hard/       # Triangle 编队 - 困难模式
+├── v_formation_Easy/    # V-Formation 编队 - 简单模式
+├── v_formation_Moderate/# V-Formation 编队 - 中等模式
+└── v_formation_Hard/    # V-Formation 编队 - 困难模式
+
+每个数据集包含:
+- benchmark-config.txt     配置参数
+- node-transmissions.csv   节点传输事件
+- topology-changes.txt     网络拓扑变化
+- node-positions.csv       节点位置轨迹
+- flowmon.xml             FlowMonitor详细数据
+- flow-stats.csv          流统计汇总
+
+难度级别说明:
+------------------------------------
+Easy (简单):
+- 理想信道条件
+- 无RTK漂移
+- 低业务负载
+- 适合算法基础验证
+
+Moderate (中等):
+- 城市环境信道
+- 周期性RTK漂移
+- 中等视频流负载
+- 适合鲁棒性测试
+
+Hard (困难):
+- 复杂多径衰落
+- 频繁RTK漂移
+- 高负载 + 共信道干扰
+- 适合极端场景测试
+
+飞行形态说明:
+------------------------------------
+cross:        交叉编队
+line:         直线编队
+triangle:     三角编队
+v_formation:  V字编队
+
+评测指标建议:
+------------------------------------
+- Packet Delivery Ratio (PDR)
+- Average Throughput
+- 95th Percentile Latency
+- Jitter
+- Topology Stability
+- Position Tracking Accuracy
+
+生成时间: Mon Oct 13 14:17:35 CST 2025

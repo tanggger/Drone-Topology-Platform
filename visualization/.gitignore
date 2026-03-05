@@ -1,0 +1,18 @@
+# 输出文件
+output/
+*.png
+*.jpg
+*.pdf
+*.gif
+
+# Python缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# 临时文件
+*.tmp
+*.log
+.DS_Store

@@ -1,0 +1,4 @@
+benchmark/*/flowmon.xml filter=lfs diff=lfs merge=lfs -text
+benchmark/*/node-transmissions.csv filter=lfs diff=lfs merge=lfs -text
+*.so filter=lfs diff=lfs merge=lfs -text
+*.gch filter=lfs diff=lfs merge=lfs -text

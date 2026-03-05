@@ -1,0 +1,115 @@
+================================================================================
+                        ns-3 RTK Benchmark 编译流程说明
+================================================================================
+
+
+一、编译架构概述
+--------------------------------------------------------------------------------
+ns-3 使用 CMake + Ninja 构建系统：
+  - CMake：负责项目配置和生成构建规则
+  - Ninja：负责执行实际的编译和链接
+
+
+二、Benchmark 源文件位置
+--------------------------------------------------------------------------------
+  - 源文件：scratch/rtk_benchmark.cc
+  - 该文件包含 main() 函数，是 RTK Benchmark 仿真的主程序
+
+
+三、自动发现与配置流程
+--------------------------------------------------------------------------------
+1. CMake 在配置阶段扫描 scratch/ 目录
+   配置文件：scratch/CMakeLists.txt
+
+2. 对 scratch/*.cc 中的每个 .cc 文件：
+   - 检查是否包含 main() 函数
+   - 若包含，则调用 create_scratch() 创建可执行目标
+
+3. create_scratch() 内部调用 build_exec() 宏，完成：
+   - 创建可执行目标（如 scratch_rtk_benchmark）
+   - 指定源文件、链接的 ns-3 模块库
+   - 设置输出路径（build/scratch/）
+
+
+四、编译目标
+--------------------------------------------------------------------------------
+  - CMake 目标名：scratch_rtk_benchmark
+  - 可执行文件：build/scratch/ns3.43-rtk_benchmark-default
+  - 链接的 ns-3 模块：core, internet, mobility, wifi, applications,
+    flow-monitor, fd-net-device, buildings 等（取决于项目配置）
+
+
+五、常用编译命令
+--------------------------------------------------------------------------------
+1. 仅编译 Benchmark：
+   ./ns3 build rtk_benchmark
+   或
+   ./ns3 build scratch_rtk_benchmark
+
+2. 编译并运行：
+   ./ns3 run rtk_benchmark
+
+3. 带参数运行示例：
+   ./ns3 run "rtk_benchmark --trajectory=data_rtk/mobility_trace_cross.txt --outputDir=benchmark --formation=cross --difficulty=hard"
+
+4. 编译整个项目（包含所有 scratch 程序）：
+   ./ns3 build
+
+
+六、ns3 脚本内部流程
+--------------------------------------------------------------------------------
+当执行 ./ns3 run rtk_benchmark 时：
+
+1. 解析参数，确定要运行的目标为 rtk_benchmark
+
+2. 查找 CMake 缓存目录（通常是 cmake-cache/）
+
+3. 检查 scratch 源文件是否有变更，必要时刷新 CMake 配置
+
+4. 调用 CMake 执行编译：
+   cmake --build cmake-cache --target scratch_rtk_benchmark [-j N]
+
+5. Ninja 实际执行：
+   - 编译：g++/clang++ 将 rtk_benchmark.cc 编译为 .o 目标文件
+   - 链接：将目标文件与 ns-3 各模块 .so 库链接成可执行文件
+
+6. 执行生成的程序：
+   build/scratch/ns3.43-rtk_benchmark-default [参数]
+
+
+七、目录结构
+--------------------------------------------------------------------------------
+ns-3.43/
+├── scratch/
+│   └── rtk_benchmark.cc        # Benchmark 源文件
+├── cmake-cache/               # CMake 配置与 Ninja 构建文件
+│   ├── CMakeCache.txt
+│   ├── build.ninja
+│   └── ns3scratches           # 扫描到的 scratch 文件列表
+├── build/
+│   └── scratch/
+│       └── ns3.43-rtk_benchmark-default   # 编译产物
+└── ns3                         # 入口脚本
+
+
+八、首次编译前的配置
+--------------------------------------------------------------------------------
+若尚未配置过项目，需先执行：
+
+  ./ns3 configure
+
+可选参数：
+  -d debug/default/release    # 构建类型
+  --enable-modules=模块列表     # 指定启用的模块
+  --disable-modules=模块列表   # 禁用某些模块
+
+
+九、批量 Benchmark 运行
+--------------------------------------------------------------------------------
+使用 run_benchmark.sh 可批量运行所有编队和难度组合：
+  4 种编队 × 3 种难度 = 12 个仿真场景
+
+  ./run_benchmark.sh
+
+脚本内部每次调用：./ns3 run "rtk_benchmark --trajectory=... --outputDir=benchmark --formation=... --difficulty=..."
+

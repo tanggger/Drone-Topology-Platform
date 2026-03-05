@@ -1,0 +1,609 @@
+/*
+ * uav_resource_allocation_advanced.cc
+ * 
+ * 无人机辅助无线通信资源分配仿真 - 高级版本
+ * 
+ * 集成功能：
+ * - 多种资源分配策略（静态、贪心、图着色、干扰感知）
+ * - 动态功率控制
+ * - 自适应速率调整
+ * - QoS性能监控（PDR、时延、吞吐量）
+ * - 拓扑演化追踪
+ * - 详细的性能输出
+ * 
+ * 作者：基于 ns-3 UAV 仿真框架
+ * 日期：2025
+ */
+
+#include "ns3/core-module.h"
+#include "ns3/network-module.h"
+#include "ns3/internet-module.h"
+#include "ns3/mobility-module.h"
+#include "ns3/wifi-module.h"
+#include "ns3/applications-module.h"
+#include "ns3/flow-monitor-module.h"
+#include "uav_lib/uav-sim-helper.h"
+#include "uav_lib/uav-resource-allocator.h"
+#include <iostream>
+#include <fstream>
+#include <sstream>
+
+using namespace ns3;
+using namespace ns3::uavsim;
+
+NS_LOG_COMPONENT_DEFINE("UAVResourceAllocationAdvanced");
+
+// ==================== 配置结构 ====================
+struct SimulationConfig {
+    // 仿真基本参数
+    double duration = 200.0;
+    uint32_t numUAVs = 15;
+    
+    // 网络参数
+    uint32_t numChannels = 3;
+    double commRange = 150.0;
+    double frequency = 2.4e9;
+    double noisePower = -90.0;
+    
+    // 功率控制
+    double txPowerMin = 10.0;
+    double txPowerMax = 30.0;
+    double targetSINR = 15.0;
+    
+    // 速率自适应
+    double dataRateMin = 1.0;
+    double dataRateMax = 54.0;
+    
+    // QoS要求
+    double targetPDR = 0.85;
+    double maxDelay = 0.100;
+    
+    // 资源分配
+    std::string strategy = "graph_coloring";  // static, greedy, graph_coloring, interference_aware
+    double reallocationInterval = 5.0;
+    bool enablePowerControl = true;
+    bool enableRateAdaptation = true;
+    
+    // 拓扑参数
+    double areaSize = 500.0;
+    double uavHeight = 50.0;
+    double minSpeed = 5.0;
+    double maxSpeed = 20.0;
+    
+    // 业务参数
+    uint32_t packetSize = 1024;
+    double packetInterval = 0.01;  // 100 packets/s
+    
+    // 输出
+    std::string outputDir = "output/uav_resource_allocation";
+};
+
+// ==================== 全局变量 ====================
+SimulationConfig g_config;
+NodeContainer g_nodes;
+Ptr<TopologyManager> g_topoMgr;
+Ptr<UAVResourceAllocator> g_allocator;
+Ptr<PowerController> g_powerCtrl;
+Ptr<RateAdapter> g_rateAdapter;
+Ptr<PerformanceStats> g_perfStats;
+Ptr<FlowMonitor> g_flowMonitor;
+FlowMonitorHelper g_flowHelper;
+
+// 输出文件流
+std::ofstream g_resourceLog;
+std::ofstream g_qosLog;
+std::ofstream g_topologyLog;
+std::ofstream g_summaryLog;
+
+// ==================== 辅助函数 ====================
+
+/**
+ * \brief 读取配置文件
+ */
+bool LoadConfig(const std::string& configFile) {
+    std::ifstream file(configFile);
+    if (!file.is_open()) {
+        NS_LOG_WARN("无法打开配置文件: " << configFile << "，使用默认配置");
+        return false;
+    }
+    
+    std::string line, section;
+    while (std::getline(file, line)) {
+        // 跳过注释和空行
+        if (line.empty() || line[0] == '#' || line[0] == ';') continue;
+        
+        // 解析段落
+        if (line[0] == '[') {
+            size_t end = line.find(']');
+            if (end != std::string::npos) {
+                section = line.substr(1, end - 1);
+            }
+            continue;
+        }
+        
+        // 解析键值对
+        size_t pos = line.find('=');
+        if (pos == std::string::npos) continue;
+        
+        std::string key = line.substr(0, pos);
+        std::string value = line.substr(pos + 1);
+        
+        // 去除空格
+        key.erase(0, key.find_first_not_of(" \t"));
+        key.erase(key.find_last_not_of(" \t") + 1);
+        value.erase(0, value.find_first_not_of(" \t"));
+        value.erase(value.find_last_not_of(" \t") + 1);
+        
+        // 根据段落和键设置配置
+        if (section == "scenario") {
+            if (key == "duration") g_config.duration = std::stod(value);
+            else if (key == "num_nodes") g_config.numUAVs = std::stoi(value);
+            else if (key == "output_dir") g_config.outputDir = value;
+        }
+        else if (section == "resource_allocation") {
+            if (key == "strategy") g_config.strategy = value;
+            else if (key == "num_channels") g_config.numChannels = std::stoi(value);
+            else if (key == "reallocation_interval") g_config.reallocationInterval = std::stod(value);
+            else if (key == "enable_power_control") g_config.enablePowerControl = (value == "true");
+            else if (key == "enable_rate_adaptation") g_config.enableRateAdaptation = (value == "true");
+        }
+        else if (section == "power_control") {
+            if (key == "tx_power_min") g_config.txPowerMin = std::stod(value);
+            else if (key == "tx_power_max") g_config.txPowerMax = std::stod(value);
+            else if (key == "target_sinr") g_config.targetSINR = std::stod(value);
+            else if (key == "noise_power") g_config.noisePower = std::stod(value);
+        }
+        else if (section == "qos_requirements") {
+            if (key == "target_pdr") g_config.targetPDR = std::stod(value);
+            else if (key == "max_delay") g_config.maxDelay = std::stod(value);
+        }
+        else if (section == "topology") {
+            if (key == "area_size") g_config.areaSize = std::stod(value);
+            else if (key == "uav_height") g_config.uavHeight = std::stod(value);
+            else if (key == "max_speed") g_config.maxSpeed = std::stod(value);
+            else if (key == "communication_range") g_config.commRange = std::stod(value);
+        }
+        else if (section == "traffic") {
+            if (key == "packet_size") g_config.packetSize = std::stoi(value);
+        }
+    }
+    
+    file.close();
+    NS_LOG_INFO("配置文件加载成功");
+    return true;
+}
+
+/**
+ * \brief 打印配置信息
+ */
+void PrintConfig() {
+    std::cout << "\n========================================" << std::endl;
+    std::cout << "无人机辅助无线通信资源分配仿真" << std::endl;
+    std::cout << "========================================" << std::endl;
+    std::cout << "[仿真参数]" << std::endl;
+    std::cout << "  节点数量: " << g_config.numUAVs << std::endl;
+    std::cout << "  仿真时长: " << g_config.duration << " 秒" << std::endl;
+    std::cout << "  仿真区域: " << g_config.areaSize << "x" << g_config.areaSize << " m²" << std::endl;
+    std::cout << "\n[资源配置]" << std::endl;
+    std::cout << "  可用信道: " << g_config.numChannels << std::endl;
+    std::cout << "  分配策略: " << g_config.strategy << std::endl;
+    std::cout << "  重分配间隔: " << g_config.reallocationInterval << " 秒" << std::endl;
+    std::cout << "  功率范围: " << g_config.txPowerMin << " ~ " << g_config.txPowerMax << " dBm" << std::endl;
+    std::cout << "\n[QoS要求]" << std::endl;
+    std::cout << "  目标PDR: " << g_config.targetPDR * 100 << "%" << std::endl;
+    std::cout << "  最大时延: " << g_config.maxDelay * 1000 << " ms" << std::endl;
+    std::cout << "\n[网络参数]" << std::endl;
+    std::cout << "  通信范围: " << g_config.commRange << " m" << std::endl;
+    std::cout << "  飞行高度: " << g_config.uavHeight << " m" << std::endl;
+    std::cout << "  速度范围: " << g_config.minSpeed << " ~ " << g_config.maxSpeed << " m/s" << std::endl;
+    std::cout << "========================================\n" << std::endl;
+}
+
+/**
+ * \brief 创建资源分配器
+ */
+Ptr<UAVResourceAllocator> CreateAllocator(const std::string& strategy) {
+    Ptr<UAVResourceAllocator> allocator;
+    
+    if (strategy == "static") {
+        allocator = CreateObject<StaticAllocator>();
+    }
+    else if (strategy == "greedy") {
+        allocator = CreateObject<GreedyAllocator>();
+    }
+    else if (strategy == "graph_coloring") {
+        allocator = CreateObject<GraphColoringAllocator>();
+    }
+    else if (strategy == "interference_aware") {
+        allocator = CreateObject<InterferenceAwareAllocator>();
+    }
+    else {
+        NS_LOG_WARN("未知策略: " << strategy << "，使用默认策略(greedy)");
+        allocator = CreateObject<GreedyAllocator>();
+    }
+    
+    allocator->SetParameters(g_config.numChannels, g_config.commRange, 
+                            g_config.frequency, g_config.noisePower);
+    
+    return allocator;
+}
+
+// ==================== 资源分配与监控 ====================
+
+/**
+ * \brief 执行资源分配
+ */
+void PerformResourceAllocation() {
+    double currentTime = Simulator::Now().GetSeconds();
+    NS_LOG_INFO("时间 " << currentTime << "s: 执行资源分配");
+    
+    // 1. 更新拓扑
+    g_topoMgr->UpdateTopology(g_nodes);
+    
+    // 2. 执行资源分配
+    AllocationResult result = g_allocator->Allocate(g_nodes, g_topoMgr);
+    
+    // 3. 功率控制（可选）
+    if (g_config.enablePowerControl && g_powerCtrl) {
+        result.powerAssignment = g_powerCtrl->IterativePowerControl(
+            g_nodes, result.channelAssignment, 5);
+    }
+    
+    // 4. 速率自适应（可选）
+    if (g_config.enableRateAdaptation && g_rateAdapter) {
+        result.rateAssignment = g_rateAdapter->AdaptRates(
+            g_nodes, result.channelAssignment, result.powerAssignment);
+    }
+    
+    // 5. 记录资源分配结果
+    g_resourceLog << currentTime;
+    for (uint32_t i = 0; i < g_nodes.GetN(); ++i) {
+        uint32_t nodeId = g_nodes.Get(i)->GetId();
+        g_resourceLog << "," << result.channelAssignment[nodeId]
+                     << "," << result.powerAssignment[nodeId]
+                     << "," << result.rateAssignment[nodeId];
+    }
+    g_resourceLog << std::endl;
+    
+    // 6. 调度下次分配
+    Simulator::Schedule(Seconds(g_config.reallocationInterval), 
+                       &PerformResourceAllocation);
+}
+
+/**
+ * \brief 监控QoS性能
+ */
+void MonitorQoS() {
+    double currentTime = Simulator::Now().GetSeconds();
+    
+    if (!g_flowMonitor) {
+        Simulator::Schedule(Seconds(1.0), &MonitorQoS);
+        return;
+    }
+    
+    g_flowMonitor->CheckForLostPackets();
+    FlowMonitor::FlowStatsContainer stats = g_flowMonitor->GetFlowStats();
+    
+    // 计算平均性能指标
+    double totalPDR = 0.0;
+    double totalDelay = 0.0;
+    double totalThroughput = 0.0;
+    uint32_t flowCount = 0;
+    
+    for (auto& [flowId, flowStats] : stats) {
+        if (flowStats.txPackets > 0) {
+            double pdr = static_cast<double>(flowStats.rxPackets) / flowStats.txPackets;
+            totalPDR += pdr;
+            flowCount++;
+            
+            if (flowStats.rxPackets > 0) {
+                double delay = flowStats.delaySum.GetSeconds() / flowStats.rxPackets;
+                totalDelay += delay;
+            }
+            
+            double throughput = flowStats.rxBytes * 8.0 / currentTime;
+            totalThroughput += throughput;
+        }
+    }
+    
+    // 记录QoS性能
+    if (flowCount > 0) {
+        double avgPDR = totalPDR / flowCount;
+        double avgDelay = totalDelay / flowCount;
+        double avgThroughput = totalThroughput / flowCount;
+        
+        g_qosLog << currentTime << "," 
+                << avgPDR << "," 
+                << avgDelay << "," 
+                << avgThroughput << std::endl;
+    }
+    
+    // 定期监控
+    Simulator::Schedule(Seconds(1.0), &MonitorQoS);
+}
+
+/**
+ * \brief 记录拓扑信息
+ */
+void LogTopology() {
+    double currentTime = Simulator::Now().GetSeconds();
+    
+    uint32_t numLinks = g_topoMgr->GetNumberOfLinks();
+    double connectivity = g_topoMgr->GetNetworkConnectivity();
+    
+    // 计算平均节点度
+    double avgDegree = 0.0;
+    for (uint32_t i = 0; i < g_nodes.GetN(); ++i) {
+        avgDegree += g_topoMgr->GetNodeDegree(i);
+    }
+    avgDegree /= g_nodes.GetN();
+    
+    g_topologyLog << currentTime << "," 
+                 << numLinks << "," 
+                 << connectivity << "," 
+                 << avgDegree << std::endl;
+    
+    // 定期记录
+    Simulator::Schedule(Seconds(2.0), &LogTopology);
+}
+
+// ==================== 应用层 ====================
+
+/**
+ * \brief 安装UDP应用
+ */
+void InstallApplications() {
+    NS_LOG_INFO("安装应用程序...");
+    
+    uint16_t port = 9000;
+    
+    // 为每对节点建立通信
+    for (uint32_t i = 0; i < g_nodes.GetN(); ++i) {
+        // 随机选择2-3个目的节点
+        uint32_t numDests = 2 + (rand() % 2);
+        
+        for (uint32_t k = 0; k < numDests && k < g_nodes.GetN() - 1; ++k) {
+            uint32_t j = (i + 1 + k) % g_nodes.GetN();
+            
+            Ptr<Node> srcNode = g_nodes.Get(i);
+            Ptr<Node> dstNode = g_nodes.Get(j);
+            
+            // 获取目的地址
+            Ptr<Ipv4> ipv4 = dstNode->GetObject<Ipv4>();
+            if (!ipv4 || ipv4->GetNInterfaces() < 2) continue;
+            
+            Ipv4Address dstAddr = ipv4->GetAddress(1, 0).GetLocal();
+            
+            // UDP客户端
+            OnOffHelper onoff("ns3::UdpSocketFactory", 
+                            InetSocketAddress(dstAddr, port));
+            onoff.SetAttribute("PacketSize", UintegerValue(g_config.packetSize));
+            onoff.SetAttribute("DataRate", DataRateValue(DataRate("1Mbps")));
+            onoff.SetAttribute("OnTime", StringValue("ns3::ConstantRandomVariable[Constant=1]"));
+            onoff.SetAttribute("OffTime", StringValue("ns3::ConstantRandomVariable[Constant=0]"));
+            
+            ApplicationContainer app = onoff.Install(srcNode);
+            app.Start(Seconds(1.0));
+            app.Stop(Seconds(g_config.duration - 1.0));
+            
+            // UDP服务器
+            PacketSinkHelper sink("ns3::UdpSocketFactory",
+                                InetSocketAddress(Ipv4Address::GetAny(), port));
+            ApplicationContainer sinkApp = sink.Install(dstNode);
+            sinkApp.Start(Seconds(0.0));
+            sinkApp.Stop(Seconds(g_config.duration));
+            
+            port++;
+        }
+    }
+    
+    NS_LOG_INFO("应用程序安装完成");
+}
+
+// ==================== 主函数 ====================
+
+int main(int argc, char *argv[]) {
+    // 命令行参数
+    std::string configFile = "uav_resource_allocation_config.ini";
+    
+    CommandLine cmd;
+    cmd.AddValue("config", "配置文件路径", configFile);
+    cmd.AddValue("duration", "仿真时长(秒)", g_config.duration);
+    cmd.AddValue("numUAVs", "UAV节点数量", g_config.numUAVs);
+    cmd.AddValue("numChannels", "可用信道数量", g_config.numChannels);
+    cmd.AddValue("strategy", "资源分配策略", g_config.strategy);
+    cmd.AddValue("outputDir", "输出目录", g_config.outputDir);
+    cmd.Parse(argc, argv);
+    
+    // 加载配置文件
+    LoadConfig(configFile);
+    
+    // 打印配置
+    PrintConfig();
+    
+    // 启用日志
+    // LogComponentEnable("UAVResourceAllocationAdvanced", LOG_LEVEL_INFO);
+    // LogComponentEnable("UAVSimHelper", LOG_LEVEL_INFO);
+    // LogComponentEnable("UAVResourceAllocator", LOG_LEVEL_INFO);
+    
+    // 创建输出目录
+    std::string mkdirCmd = "mkdir -p " + g_config.outputDir;
+    int ret = system(mkdirCmd.c_str());
+    (void)ret;
+    
+    // 打开输出文件
+    g_resourceLog.open(g_config.outputDir + "/resource_allocation.csv");
+    g_qosLog.open(g_config.outputDir + "/qos_performance.csv");
+    g_topologyLog.open(g_config.outputDir + "/topology_evolution.csv");
+    g_summaryLog.open(g_config.outputDir + "/summary.txt");
+    
+    // 写入CSV表头
+    g_resourceLog << "time";
+    for (uint32_t i = 0; i < g_config.numUAVs; ++i) {
+        g_resourceLog << ",uav" << i << "_ch,uav" << i << "_pwr,uav" << i << "_rate";
+    }
+    g_resourceLog << std::endl;
+    
+    g_qosLog << "time,avg_pdr,avg_delay,avg_throughput" << std::endl;
+    g_topologyLog << "time,num_links,connectivity,avg_degree" << std::endl;
+    
+    // 创建节点
+    g_nodes.Create(g_config.numUAVs);
+    
+    // 配置移动模型
+    MobilityHelper mobility;
+    mobility.SetPositionAllocator("ns3::RandomBoxPositionAllocator",
+                                  "X", StringValue("ns3::UniformRandomVariable[Min=0.0|Max=" + 
+                                                   std::to_string(g_config.areaSize) + "]"),
+                                  "Y", StringValue("ns3::UniformRandomVariable[Min=0.0|Max=" + 
+                                                   std::to_string(g_config.areaSize) + "]"),
+                                  "Z", StringValue("ns3::ConstantRandomVariable[Constant=" + 
+                                                   std::to_string(g_config.uavHeight) + "]"));
+    
+    mobility.SetMobilityModel("ns3::RandomWalk2dMobilityModel",
+                             "Bounds", RectangleValue(Rectangle(0, g_config.areaSize, 
+                                                                0, g_config.areaSize)),
+                             "Speed", StringValue("ns3::UniformRandomVariable[Min=" + 
+                                                  std::to_string(g_config.minSpeed) + "|Max=" +
+                                                  std::to_string(g_config.maxSpeed) + "]"),
+                             "Distance", DoubleValue(50.0));
+    mobility.Install(g_nodes);
+    
+    // 配置WiFi
+    WifiHelper wifi;
+    wifi.SetStandard(WIFI_STANDARD_80211a);
+    
+    YansWifiPhyHelper wifiPhy;
+    YansWifiChannelHelper wifiChannel = YansWifiChannelHelper::Default();
+    wifiPhy.SetChannel(wifiChannel.Create());
+    wifiPhy.Set("TxPowerStart", DoubleValue(g_config.txPowerMax));
+    wifiPhy.Set("TxPowerEnd", DoubleValue(g_config.txPowerMax));
+    
+    WifiMacHelper wifiMac;
+    wifiMac.SetType("ns3::AdhocWifiMac");
+    
+    NetDeviceContainer devices = wifi.Install(wifiPhy, wifiMac, g_nodes);
+    
+    // 安装协议栈
+    InternetStackHelper internet;
+    internet.Install(g_nodes);
+    
+    // 分配IP地址
+    Ipv4AddressHelper ipv4;
+    ipv4.SetBase("10.1.1.0", "255.255.255.0");
+    Ipv4InterfaceContainer interfaces = ipv4.Assign(devices);
+    
+    // 配置路由
+    Ipv4GlobalRoutingHelper::PopulateRoutingTables();
+    
+    // 创建管理器
+    g_topoMgr = CreateObject<TopologyManager>(g_config.numUAVs, g_config.commRange);
+    g_perfStats = CreateObject<PerformanceStats>();
+    g_allocator = CreateAllocator(g_config.strategy);
+    
+    if (g_config.enablePowerControl) {
+        g_powerCtrl = Create<PowerController>(g_config.txPowerMin, 
+                                             g_config.txPowerMax, 
+                                             g_config.targetSINR);
+    }
+    
+    if (g_config.enableRateAdaptation) {
+        g_rateAdapter = Create<RateAdapter>(g_config.dataRateMin, 
+                                           g_config.dataRateMax);
+    }
+    
+    // 安装应用
+    InstallApplications();
+    
+    // 安装FlowMonitor
+    g_flowMonitor = g_flowHelper.InstallAll();
+    
+    // 调度任务
+    Simulator::Schedule(Seconds(0.5), &PerformResourceAllocation);
+    Simulator::Schedule(Seconds(1.0), &MonitorQoS);
+    Simulator::Schedule(Seconds(2.0), &LogTopology);
+    
+    // 运行仿真
+    std::cout << "开始仿真...\n" << std::endl;
+    Simulator::Stop(Seconds(g_config.duration));
+    Simulator::Run();
+    
+    // 输出最终统计
+    std::cout << "\n========================================" << std::endl;
+    std::cout << "仿真完成！" << std::endl;
+    std::cout << "========================================" << std::endl;
+    
+    g_flowMonitor->CheckForLostPackets();
+    FlowMonitor::FlowStatsContainer stats = g_flowMonitor->GetFlowStats();
+    
+    double totalPDR = 0.0;
+    double totalDelay = 0.0;
+    double totalThroughput = 0.0;
+    uint32_t flowCount = 0;
+    
+    for (auto& [flowId, flowStats] : stats) {
+        if (flowStats.txPackets > 0) {
+            double pdr = static_cast<double>(flowStats.rxPackets) / flowStats.txPackets;
+            totalPDR += pdr;
+            flowCount++;
+            
+            if (flowStats.rxPackets > 0) {
+                double delay = flowStats.delaySum.GetSeconds() / flowStats.rxPackets;
+                totalDelay += delay;
+            }
+            
+            double throughput = flowStats.rxBytes * 8.0 / g_config.duration;
+            totalThroughput += throughput;
+        }
+    }
+    
+    if (flowCount > 0) {
+        double avgPDR = totalPDR / flowCount;
+        double avgDelay = totalDelay / flowCount;
+        double totalThroughputMbps = totalThroughput / 1e6;
+        
+        std::cout << "\n[性能指标]" << std::endl;
+        std::cout << "  平均分组投递率: " << avgPDR * 100 << "%" << std::endl;
+        std::cout << "  平均端到端时延: " << avgDelay * 1000 << " ms" << std::endl;
+        std::cout << "  总吞吐量: " << totalThroughputMbps << " Mbps" << std::endl;
+        
+        // QoS满足情况
+        bool pdrSatisfied = (avgPDR >= g_config.targetPDR);
+        bool delaySatisfied = (avgDelay <= g_config.maxDelay);
+        
+        std::cout << "\n[QoS满足情况]" << std::endl;
+        std::cout << "  PDR要求 (" << g_config.targetPDR * 100 << "%): " 
+                 << (pdrSatisfied ? "✓ 满足" : "✗ 不满足") << std::endl;
+        std::cout << "  时延要求 (" << g_config.maxDelay * 1000 << " ms): " 
+                 << (delaySatisfied ? "✓ 满足" : "✗ 不满足") << std::endl;
+        
+        // 写入摘要
+        g_summaryLog << "无人机资源分配仿真摘要" << std::endl;
+        g_summaryLog << "========================" << std::endl;
+        g_summaryLog << "节点数量: " << g_config.numUAVs << std::endl;
+        g_summaryLog << "仿真时长: " << g_config.duration << " 秒" << std::endl;
+        g_summaryLog << "分配策略: " << g_config.strategy << std::endl;
+        g_summaryLog << "\n性能指标:" << std::endl;
+        g_summaryLog << "  平均PDR: " << avgPDR * 100 << "%" << std::endl;
+        g_summaryLog << "  平均时延: " << avgDelay * 1000 << " ms" << std::endl;
+        g_summaryLog << "  总吞吐量: " << totalThroughputMbps << " Mbps" << std::endl;
+        g_summaryLog << "\nQoS满足情况:" << std::endl;
+        g_summaryLog << "  PDR: " << (pdrSatisfied ? "满足" : "不满足") << std::endl;
+        g_summaryLog << "  时延: " << (delaySatisfied ? "满足" : "不满足") << std::endl;
+    }
+    
+    std::cout << "\n输出文件保存在: " << g_config.outputDir << std::endl;
+    std::cout << "========================================\n" << std::endl;
+    
+    // 关闭文件
+    g_resourceLog.close();
+    g_qosLog.close();
+    g_topologyLog.close();
+    g_summaryLog.close();
+    
+    // 清理
+    Simulator::Destroy();
+    
+    return 0;
+}
+
