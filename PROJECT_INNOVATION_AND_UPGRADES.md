@@ -14,7 +14,7 @@
 
 ## 一、 底层 NS-3 核心引擎的重构与闭环 (C++ 层面)
 
-> **核心文件**：[`scratch/uav_resource_allocation.cc`](file:///home/tzx/ns-3.43/scratch/uav_resource_allocation.cc)
+> **核心文件**：[`scratch/uav_resource_allocation.cc`](./scratch/uav_resource_allocation.cc)
 
 在最核心的调度引擎上，我们不仅修复了原有无法编译的错误，更将“纸上谈兵”的数据算法落地到了真实的物理层 API 调用。
 
@@ -23,7 +23,7 @@
 * **我们的升级**：实现了真正的**闭环网络控制 (Closed-Loop Control)**。调用了经过我们深度挖潜的机制，通过 `wifiPhy->SetOperatingChannel()` 和 `wifiPhy->SetTxPowerStart()`，在纳秒级的仿真中实时硬切换 5GHz 的物理频段和天线发射功率。你的算法产出的不再是假报表，而是真实的电磁波调度。
 
 ### 1.2 高精度滑动窗口 QoS 实时监控 (数据可信度)
-*   **对应实现**：[`uav_resource_allocation.cc`](file:///home/tzx/ns-3.43/scratch/uav_resource_allocation.cc) 中的 `TxCb/RxCb` 钩子。
+*   **对应实现**：[`uav_resource_allocation.cc`](./scratch/uav_resource_allocation.cc) 中的 `TxCb/RxCb` 钩子。
 *   **原始版本**：利用 FlowMonitor 进行全局的累加统计，导致 PDR（投递率）和时延数据是一笔糊涂账，且存在 IP 映射错误只统计节点 0 的低级 BUG。
 *   **我们的升级**：重头手写了底层的 `Tx/Rx Payload` 钩子回调，构建了基于 **“5秒滑动窗口 (Sliding Window)”** 的精细化监控指标。每架单独的无人机、在每个极短的时间切片内的吞吐与掉包，都能被精准分离并独立计算，从而为前端的“每一台飞机的数据钻取”提供了严谨支撑。
 
@@ -42,19 +42,19 @@
     *   **核心立意**：我们不仅能做静态的通信研究，更能在一个充满不确定因素的**动态物理飞行场景**中，保障物流数据的零丢失与机队的再汇聚。这证明了我们的代码是真正“活”的。
 
 ### 1.5 城市峡谷脆弱性建模：卫星导航 (RTK/GPS) 失锁与漂移模拟 (学术高地)
-*   **对应实现**：[`scratch/rtk_benchmark.cc`](file:///home/tzx/ns-3.43/scratch/rtk_benchmark.cc) 中的 `ApplyRTKNoise()`。
+*   **对应实现**：[`scratch/rtk_benchmark.cc`](./scratch/rtk_benchmark.cc) 中的 `ApplyRTKNoise()`。
 *   **技术背景**：在 CBD 超高层建筑群中，无人机不仅面临通信断连，更面临严重的定位多径反射误差。
 *   **创新实现**：移植了高阶物理模块。实现了高精度的物理模拟：当无人机进入高楼遮蔽区或强干扰区时，其在上报给调度算法的坐标会产生 **0.5m - 2.0m 的随机高斯漂移与周期性失锁**。
 *   **演播价值**：这挑战了调度算法在“坐标不准”极端情况下的决策韧性。算法必须通过预留更大的保护带（Guard Band）或更频发的邻居探测来补偿定位误差，极大地拔高了项目的学术深度。
 
 ### 1.6 动态电磁对抗：游击式“黑飞”移动干扰源模拟 (实战化)
-*   **对应实现**：[`scratch/rtk_benchmark.cc`](file:///home/tzx/ns-3.43/scratch/rtk_benchmark.cc) 中的 `CreateInterferenceNodes`。
+*   **对应实现**：[`scratch/rtk_benchmark.cc`](./scratch/rtk_benchmark.cc) 中的 `CreateInterferenceNodes`。
 *   **升级内容**：在静态红圈干扰区的基础上，引入了敌意节点生成逻辑。
 *   **创新实现**：系统中存在若干架不服从调度的“敌对黑飞无人机”。它们会携带高功率全频段压制模块在沙盘中游荡，随机对物流机队发起“扫频攻击”。
 *   **演播价值**：物流机群必须在后台 DSATUR 算法的指挥下，实时进行“信道博弈”与“功率躲避”，上演一场惊心动魄的低空电磁攻防战。
 
 ### 1.7 工业级多环境测试 Benchmark 体系 (科研严谨性)
-*   **配套文件**：[`benchmark/BENCHMARK_MODES_README.md`](file:///home/tzx/ns-3.43/benchmark/BENCHMARK_MODES_README.md)
+*   **配套文件**：[`benchmark/BENCHMARK_MODES_README.md`](./benchmark/BENCHMARK_MODES_README.md)
 *   **创新实现**：系统内置了 **“Easy (实验室模式) / Moderate (城市模式) / Hard (极端模式)”** 三级环境挑战。
 *   **场景参数化**：将 Nakagami-m 衰落模型、业务负载流量、信道重传次数进行了精密的场景梯度划分，使得同一套算法可以在三种不同复杂度的电磁环境下进行全自动化的批次回归测试，符合严谨的科研论文评价体系。
 
@@ -62,7 +62,7 @@
 
 ## 二、 前端数字孪生与“上帝之手”沙盘演练系统 (UI 层)
 
-> **核心文件**：[`wing_net_omni_hub.html`](file:///home/tzx/ns-3.43/wing_net_omni_hub.html)
+> **核心文件**：[`wing_net_omni_hub.html`](./wing_net_omni_hub.html)
 
 我们完全超越了“跑脚本看命令行”的远古仿真套路，为你生生手搓了一整套 **Wing-Net Omni Dashboard**（翼网全境数字孪生沙盘）。这是比赛中极度吸睛的核武器！
 
@@ -82,13 +82,13 @@
     *   在最终的视频录制与答辩中，我们将完整展示**【鼠标画楼 -> 引擎接收演算 -> 机群避障断网 -> 算法瞬间自愈】**的全链条。这兼顾了展示的可控绝对安全与底层学术代码的 100% 严谨性，不留任何破绽。
 
 ### 2.4 极简美学分析实验室：跨算法全维度性能对比看板 (新颖设计)
-*   **分析脚本**：可通过 [`benchmark/visualize_metrics.py`](file:///home/tzx/ns-3.43/benchmark/visualize_metrics.py) 等全自动化工具链生成。
+*   **分析脚本**：可通过 [`benchmark/visualize_metrics.py`](./benchmark/visualize_metrics.py) 等全自动化工具链生成。
 *   **视觉革新**：摒弃传统丑陋的 Excel 处理图表。我们设计了一套全新的 **“实验室级性能对标看板”**。
 *   **创新功能**：采用具有磨砂玻璃质感的深色系 UI。通过**五维雷达图**（展示吞吐、延时、PDR、能效、公平性平衡）和**多色阶链路生存热力图**，直观对比 Static、Greedy 与我们提出的 Graph-Coloring 算法。
-*   **预览文件**：[`benchmark/formation_radar.png`](file:///home/tzx/ns-3.43/benchmark/formation_radar.png) (极具冲击力的专业数据展示)。
+*   **预览文件**：[`benchmark/formation_radar.png`](./benchmark/formation_radar.png) (极具冲击力的专业数据展示)。
 
 ### 2.5 真实航迹注入：从“碰碰车”到“工业编队”的质感跨越
-*   **对应实现**：音频模块基于 [`scratch/rtk_simulation.cc`](file:///home/tzx/ns-3.43/scratch/rtk_simulation.cc)，数据源在于 [`data_rtk/`](file:///home/tzx/ns-3.43/data_rtk/)。
+*   **对应实现**：音频模块基于 [`scratch/rtk_simulation.cc`](./scratch/rtk_simulation.cc)，数据源在于 [`data_rtk/`](./data_rtk/)。
 *   **升级内容**：系统支持加载 **V-Formation（雁阵流）**、**Cross（十字队形）** 等真实工业回传轨迹或规划好的航迹。
 *   **创新体现**：不再是乱飞的“碰碰车”演示，取而代之的是严谨、有序、极具物流配送仪式感的机群编队航行。甚至能看到在绕过高楼后，机群如何通过微秒级的补偿重新汇聚成完美的几何阵型。
 

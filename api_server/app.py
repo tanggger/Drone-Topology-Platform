@@ -11,8 +11,8 @@ import sys
 app = Flask(__name__)
 CORS(app) # 允许跨域请求，方便前端独立在另外的端口或服务器上运行访问
 
-# NS-3 的工程根目录 (硬编码到本机器绝对路径或从相对路径计算)
-NS3_DIR = "/home/tzx/ns-3.43"
+# NS-3 的工程根目录 (从当前文件位置动态计算，增强可移植性)
+NS3_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def run_simulation_task(task_id, config):
     try:
