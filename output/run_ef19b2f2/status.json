@@ -1,0 +1,1 @@
+{"status": "FAILED", "error": "Command '['/home/tzx/miniconda3/envs/ns3/bin/python', 'analyze_resource_allocation.py', 'output/run_ef19b2f2', '--all']' returned non-zero exit status 1."}

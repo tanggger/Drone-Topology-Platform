@@ -1,0 +1,42 @@
+{
+  "simulation_info": {
+    "data_directory": "output/run_2032c5b5",
+    "analysis_date": "2026-03-06 13:41:42"
+  },
+  "qos_performance": {
+    "avg_pdr": 0.0,
+    "min_pdr": 0.0,
+    "max_pdr": 0.0,
+    "std_pdr": 0.0,
+    "avg_delay_ms": 0.0,
+    "min_delay_ms": 0.0,
+    "max_delay_ms": 0.0,
+    "std_delay_ms": 0.0,
+    "avg_throughput_mbps": 0.0,
+    "total_throughput_mbps": 0.0,
+    "std_throughput_mbps": 0.0
+  },
+  "resource_allocation": {
+    "channel_distribution": {
+      "0": 111,
+      "1": 20,
+      "2": 19
+    },
+    "avg_power": 19.682674666666667,
+    "min_power": 18.037,
+    "max_power": 22.5642,
+    "std_power": 1.5376076479229774,
+    "avg_rate": 6.158663,
+    "min_rate": 4.71792,
+    "max_rate": 6.98151,
+    "std_rate": 0.7688023826459439,
+    "avg_interference": 0.07806666666666667,
+    "max_interference": 0.08
+  },
+  "topology_evolution": {
+    "avg_links": 102.08333333333333,
+    "min_links": 102,
+    "max_links": 103,
+    "avg_connectivity": 0.9722225833333332
+  }
+}

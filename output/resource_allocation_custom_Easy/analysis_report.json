@@ -1,0 +1,26 @@
+{
+  "simulation_info": {
+    "data_directory": "output/resource_allocation_custom_Easy",
+    "analysis_date": "2026-03-05 16:19:20"
+  },
+  "qos_performance": {
+    "avg_pdr": 0.5375984521666666,
+    "min_pdr": 0.0,
+    "max_pdr": 0.9749247000000001,
+    "std_pdr": 0.36899138498369627,
+    "avg_delay_ms": 1.7682643450000002,
+    "min_delay_ms": 0.0,
+    "max_delay_ms": 6.61139825,
+    "std_delay_ms": 1.7682043306484851,
+    "avg_throughput_mbps": 0.09632491333333332,
+    "total_throughput_mbps": 1.4448736999999998,
+    "std_throughput_mbps": 0.06746701995573333
+  },
+  "resource_allocation": {},
+  "topology_evolution": {
+    "avg_links": 101.8,
+    "min_links": 100,
+    "max_links": 102,
+    "avg_connectivity": 0.9695242000000001
+  }
+}

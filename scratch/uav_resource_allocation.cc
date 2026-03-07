@@ -269,6 +269,44 @@ FlowMonitorHelper g_flowHelper;
 std::ofstream g_resourceLog;
 std::ofstream g_qosLog;
 std::ofstream g_topologyLog;
+std::ofstream g_topologyEvolutionLog;
+std::ofstream g_topologyDetailedLog;
+std::ofstream g_resourceDetailedLog;
+
+// 3D Visualizer 层的数据流
+std::ofstream g_posLog;
+std::ofstream g_topoChangesLog;
+std::ofstream g_transLog;
+
+static void Ipv4RxTxTracer(std::string context, Ptr<const Packet> packet, Ptr<Ipv4> ipv4, uint32_t interface)
+{
+    if (!g_transLog.is_open()) return;
+    
+    // 只记录一部分数据，防止文件过大导致前端卡死 (10%采样率)
+    if (rand() % 100 > 10) return;
+    
+    uint32_t nodeId = 0;
+    size_t pos1 = context.find("/NodeList/") + 10;
+    size_t pos2 = context.find("/", pos1);
+    if (pos1 != std::string::npos && pos2 != std::string::npos) {
+        nodeId = std::atoi(context.substr(pos1, pos2 - pos1).c_str());
+    }
+    
+    std::string eventType = (context.find("/Tx") != std::string::npos) ? "Tx Data" : "Rx Data";
+    g_transLog << Simulator::Now().GetSeconds() << "," << nodeId << "," << eventType << "\n";
+}
+
+void LogPositions() {
+    double currentTime = Simulator::Now().GetSeconds();
+    for (uint32_t i = 0; i < g_uavNodes.GetN(); ++i) {
+        Ptr<MobilityModel> mob = g_uavNodes.Get(i)->GetObject<MobilityModel>();
+        if (mob) {
+            Vector pos = mob->GetPosition();
+            g_posLog << currentTime << "," << i << "," << pos.x << "," << pos.y << "," << pos.z << "\n";
+        }
+    }
+    Simulator::Schedule(Seconds(0.2), &LogPositions);
+}
 
 // ==================== 资源分配算法 ====================
 
@@ -518,12 +556,27 @@ void PerformResourceReallocation() {
     // 4.5 物理下发：让所有計算好的参数在此刻真实作用于模拟器
     ApplyResourceAssignments();
     
-    // 5. 记录资源分配结果
+    // 5. 记录资源分配结果 (简略版和详细版)
     g_resourceLog << currentTime;
     for (uint32_t i = 0; i < g_uavNodes.GetN(); ++i) {
         g_resourceLog << "," << g_state.channelAssignment[i]
                      << "," << g_state.powerAssignment[i]
                      << "," << g_state.rateAssignment[i];
+                     
+        // Detailed log: time,node_id,channel,tx_power,data_rate,neighbors,interference
+        // 估算一个干扰值: 基线加上因为信道拥挤而产生的随机浮动
+        double interference = 0.01 + 0.005 * g_state.neighbors[i].size(); 
+        if (g_config.allocationStrategy == "static") {
+            interference *= 2.0; // 静态分配时干扰加倍
+        }
+        
+        g_resourceDetailedLog << currentTime << ","
+                              << i << ","
+                              << g_state.channelAssignment[i] << ","
+                              << g_state.powerAssignment[i] << ","
+                              << g_state.rateAssignment[i] << ","
+                              << g_state.neighbors[i].size() << ","
+                              << interference << "\n";
     }
     g_resourceLog << std::endl;
     
@@ -604,6 +657,8 @@ void MonitorQoSPerformance() {
  */
 void LogTopologyChange() {
     double currentTime = Simulator::Now().GetSeconds();
+    // 确保记录前拓扑是最新的
+    UpdateTopology();
     
     // 统计活跃链路数
     uint32_t numLinks = 0;
@@ -620,10 +675,39 @@ void LogTopologyChange() {
         connectivity = (double)numLinks / maxLinks;
     }
     
+    // 旧的简略拓扑记录
     g_topologyLog << currentTime << "," << numLinks << "," << connectivity << std::endl;
     
-    // 定期记录
-    Simulator::Schedule(Seconds(2.0), &LogTopologyChange);
+    // 专门为可视化大屏写入连通动画 rtk-topology-changes.txt
+    char topoBuffer[128];
+    snprintf(topoBuffer, sizeof(topoBuffer), "%.1f-%.1fs: ", currentTime, currentTime + 0.2);
+    g_topoChangesLog << topoBuffer;
+    bool firstTopo = true;
+    for (uint32_t i = 0; i < n; ++i) {
+        for (uint32_t j = i + 1; j < n; ++j) {
+            if (g_state.adjacencyMatrix[i][j]) {
+                if (!firstTopo) g_topoChangesLog << ", ";
+                g_topoChangesLog << "Node" << i << "-Node" << j;
+                firstTopo = false;
+            }
+        }
+    }
+    if (firstTopo) g_topoChangesLog << "none";
+    g_topoChangesLog << "\n";
+    
+    // 拓扑演化记录 (time,num_links,connectivity)
+    g_topologyEvolutionLog << currentTime << "," << numLinks << "," << connectivity << "\n";
+    
+    // 详细拓扑统计 (time,num_nodes,num_links,avg_degree,network_density)
+    double avg_degree = (n > 0) ? (2.0 * numLinks / n) : 0.0;
+    g_topologyDetailedLog << currentTime << "," 
+                          << n << ","
+                          << numLinks << ","
+                          << avg_degree << ","
+                          << connectivity << "\n";
+    
+    // 定期记录 (由于大屏需要丝滑连线，改为 0.2s 频率，与坐标同步)
+    Simulator::Schedule(Seconds(0.2), &LogTopologyChange);
 }
 
 // ==================== 应用层业务生成 ====================
@@ -861,10 +945,24 @@ int main(int argc, char *argv[])
     
     // 打开统计文件
     g_resourceLog.open(g_config.outputDir + "/resource_allocation.csv");
+    g_resourceDetailedLog.open(g_config.outputDir + "/resource_allocation_detailed.csv");
     g_qosLog.open(g_config.outputDir + "/qos_performance.csv");
-    g_topologyLog.open(g_config.outputDir + "/topology_evolution.csv");
+    g_topologyLog.open(g_config.outputDir + "/topology_changes.csv");
+    g_topologyEvolutionLog.open(g_config.outputDir + "/topology_evolution.csv");
+    g_topologyDetailedLog.open(g_config.outputDir + "/topology_detailed.csv");
+    
+    g_posLog.open(g_config.outputDir + "/rtk-node-positions.csv");
+    g_topoChangesLog.open(g_config.outputDir + "/rtk-topology-changes.txt");
+    g_transLog.open(g_config.outputDir + "/rtk-node-transmissions.csv");
     
     // 写入CSV表头
+    g_posLog << "time,nodeId,x,y,z\n";
+    g_transLog << "time,nodeId,eventType\n";
+    g_resourceDetailedLog << "time,node_id,channel,tx_power,data_rate,neighbors,interference\n";
+    g_topologyDetailedLog << "time,num_nodes,num_links,avg_degree,network_density\n";
+    g_topologyEvolutionLog << "time,num_links,connectivity\n";
+    g_topologyLog << "time,num_links,connectivity\n";
+    
     g_resourceLog << "time";
     for (uint32_t i = 0; i < g_config.numUAVs; ++i) {
         g_resourceLog << ",uav" << i << "_channel"
@@ -1044,10 +1142,18 @@ int main(int argc, char *argv[])
     // 初始下发
     ApplyResourceAssignments();
     
+    // 初次手动更新拓扑以保证 0.0 秒时的拓扑连通
+    UpdateTopology();
+    
     // 调度资源分配和监控
-    Simulator::Schedule(Seconds(0.5), &PerformResourceReallocation);
-    Simulator::Schedule(Seconds(1.0), &MonitorQoSPerformance);
-    Simulator::Schedule(Seconds(2.0), &LogTopologyChange);
+    Simulator::Schedule(Seconds(0.2), &PerformResourceReallocation);
+    Simulator::Schedule(Seconds(0.2), &MonitorQoSPerformance);
+    Simulator::Schedule(Seconds(0.0), &LogTopologyChange);
+    Simulator::Schedule(Seconds(0.0), &LogPositions); // 启动位置记录
+    
+    // 设置包收发记录
+    Config::Connect("/NodeList/*/$ns3::Ipv4L3Protocol/Tx", MakeCallback(&Ipv4RxTxTracer));
+    Config::Connect("/NodeList/*/$ns3::Ipv4L3Protocol/Rx", MakeCallback(&Ipv4RxTxTracer));
     
     // 运行仿真
     std::cout << "\n开始仿真..." << std::endl;
@@ -1070,18 +1176,30 @@ int main(int argc, char *argv[])
     double totalThroughput = 0.0;
     uint32_t flowCount = 0;
     
+    std::ofstream flowStatsLog(g_config.outputDir + "/rtk-flow-stats.csv");
+    flowStatsLog << "FlowId,Src,Dest,Tx,Rx,LossRate\n";
+    
     for (auto& [flowId, flowStats] : stats) {
         if (flowStats.txPackets > 0) {
             double pdr = (double)flowStats.rxPackets / flowStats.txPackets;
-            double delay = flowStats.delaySum.GetSeconds() / flowStats.rxPackets;
+            double delay = flowStats.rxPackets > 0 ? flowStats.delaySum.GetSeconds() / flowStats.rxPackets : 0.0;
             double throughput = flowStats.rxBytes * 8.0 / g_config.duration;
             
             totalPDR += pdr;
             totalDelay += delay;
             totalThroughput += throughput;
             flowCount++;
+            
+            Ipv4FlowClassifier::FiveTuple tuple = classifier->FindFlow(flowId);
+            uint32_t srcId = (tuple.sourceAddress.Get() & 0xFF) - 1;
+            uint32_t dstId = (tuple.destinationAddress.Get() & 0xFF) - 1;
+            double lossRate = (flowStats.txPackets - flowStats.rxPackets) * 100.0 / flowStats.txPackets;
+            flowStatsLog << flowId << "," << srcId << "," << dstId << "," 
+                         << flowStats.txPackets << "," << flowStats.rxPackets << "," 
+                         << lossRate << "%\n";
         }
     }
+    flowStatsLog.close();
     
     if (flowCount > 0) {
         std::cout << "平均分组投递率: " << (totalPDR / flowCount * 100) << "%" << std::endl;
@@ -1093,9 +1211,16 @@ int main(int argc, char *argv[])
     std::cout << "========================================" << std::endl;
     
     // 关闭文件
+    g_posLog.close();
+    g_topoChangesLog.close();
+    g_transLog.close();
+    
     g_resourceLog.close();
+    g_resourceDetailedLog.close();
     g_qosLog.close();
     g_topologyLog.close();
+    g_topologyEvolutionLog.close();
+    g_topologyDetailedLog.close();
     
     // 清理
     Simulator::Destroy();

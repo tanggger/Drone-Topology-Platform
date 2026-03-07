@@ -156,7 +156,7 @@ class UAVResourceAllocationAnalyzer:
         
         # 信道使用分布
         channel_usage = self.resource_detailed.groupby('channel').size()
-        results['channel_distribution'] = channel_usage.to_dict()
+        results['channel_distribution'] = {int(k): int(v) for k, v in channel_usage.items()}
         
         # 功率分配统计
         results['avg_power'] = self.resource_detailed['tx_power'].mean()
@@ -417,13 +417,25 @@ class UAVResourceAllocationAnalyzer:
             'topology_evolution': self.results.get('topology', {})
         }
         
+        # 修复 numpy 类型无法序列化的 bug
+        def default_serializer(obj):
+            if isinstance(obj, (np.int_, np.intc, np.intp, np.int8,
+                                np.int16, np.int32, np.int64, np.uint8,
+                                np.uint16, np.uint32, np.uint64)):
+                return int(obj)
+            elif isinstance(obj, (np.float_, np.float16, np.float32, np.float64)):
+                return float(obj)
+            elif isinstance(obj, (np.ndarray,)):
+                return obj.tolist()
+            return obj
+            
         if save_path:
             report_path = save_path
         else:
             report_path = self.data_dir / 'analysis_report.json'
         
         with open(report_path, 'w', encoding='utf-8') as f:
-            json.dump(report, f, indent=2, ensure_ascii=False)
+            json.dump(report, f, indent=2, ensure_ascii=False, default=default_serializer)
         
         print(f"  ✓ 报告已保存到: {report_path}\n")
         

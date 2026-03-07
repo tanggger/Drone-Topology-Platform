@@ -1,0 +1,13 @@
+formation,difficulty,avg_pdr,avg_delay_ms,avg_tput_mbps,uav_count
+v_formation,Easy,1.0,0.3989,0.197,15
+v_formation,Moderate,1.0,0.3989,0.197,15
+v_formation,Hard,1.0,0.3989,0.197,15
+cross,Easy,1.0,0.3989,0.197,15
+cross,Moderate,1.0,0.3988,0.197,15
+cross,Hard,0.9979,0.4066,0.1966,15
+line,Easy,1.0,0.3989,0.197,15
+line,Moderate,1.0,0.3989,0.197,15
+line,Hard,1.0,0.3989,0.197,15
+triangle,Easy,1.0,0.3989,0.197,15
+triangle,Moderate,1.0,0.3989,0.197,15
+triangle,Hard,1.0,0.3989,0.197,15

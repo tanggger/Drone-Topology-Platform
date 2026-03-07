@@ -1,0 +1,1 @@
+{"status": "FAILED", "error": "Command '['python3', 'analyze_resource_allocation.py', 'output/run_f2d2bad8', '--all']' returned non-zero exit status 1."}
