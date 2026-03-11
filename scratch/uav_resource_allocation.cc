@@ -191,7 +191,9 @@ void SetupFormationMobility(NodeContainer& nodes)
         } else {
             std::cerr << "警告: 节点 " << nodeId << " 没有轨迹数据，使用静止位置" << std::endl;
             waypoint->AddWaypoint(Waypoint(Seconds(0.0), Vector(0, 0, 50)));
-            waypoint->AddWaypoint(Waypoint(Seconds(g_trajectoryEndTime), Vector(0, 0, 50)));
+            
+            double endTime = std::max(g_trajectoryEndTime, 1.0); // 至少持续 1 秒
+            waypoint->AddWaypoint(Waypoint(Seconds(endTime), Vector(0, 0, 50)));
         }
     }
 }
@@ -261,6 +263,7 @@ struct ResourceAllocationState {
 ResourceAllocationConfig g_config;
 ResourceAllocationState g_state;
 NodeContainer g_uavNodes;
+NodeContainer g_interferenceNodes; // 黑飞节点全局容器 (CSV 中 nodeId 偏移量: +1000, node_type=1)
 std::map<uint32_t, Ptr<Application>> g_applications;
 Ptr<FlowMonitor> g_flowMonitor;
 FlowMonitorHelper g_flowHelper;
@@ -278,31 +281,22 @@ std::ofstream g_posLog;
 std::ofstream g_topoChangesLog;
 std::ofstream g_transLog;
 
-static void Ipv4RxTxTracer(std::string context, Ptr<const Packet> packet, Ptr<Ipv4> ipv4, uint32_t interface)
-{
-    if (!g_transLog.is_open()) return;
-    
-    // 只记录一部分数据，防止文件过大导致前端卡死 (10%采样率)
-    if (rand() % 100 > 10) return;
-    
-    uint32_t nodeId = 0;
-    size_t pos1 = context.find("/NodeList/") + 10;
-    size_t pos2 = context.find("/", pos1);
-    if (pos1 != std::string::npos && pos2 != std::string::npos) {
-        nodeId = std::atoi(context.substr(pos1, pos2 - pos1).c_str());
-    }
-    
-    std::string eventType = (context.find("/Tx") != std::string::npos) ? "Tx Data" : "Rx Data";
-    g_transLog << Simulator::Now().GetSeconds() << "," << nodeId << "," << eventType << "\n";
-}
-
 void LogPositions() {
     double currentTime = Simulator::Now().GetSeconds();
+    // 记录正常无人机集群 (node_type=0)
     for (uint32_t i = 0; i < g_uavNodes.GetN(); ++i) {
         Ptr<MobilityModel> mob = g_uavNodes.Get(i)->GetObject<MobilityModel>();
         if (mob) {
             Vector pos = mob->GetPosition();
-            g_posLog << currentTime << "," << i << "," << pos.x << "," << pos.y << "," << pos.z << "\n";
+            g_posLog << currentTime << "," << i << "," << pos.x << "," << pos.y << "," << pos.z << ",0\n";
+        }
+    }
+    // 记录黑飞节点 (node_type=1，nodeId 从 1000 起步，前端据此渲染红色敌机)
+    for (uint32_t i = 0; i < g_interferenceNodes.GetN(); ++i) {
+        Ptr<MobilityModel> mob = g_interferenceNodes.Get(i)->GetObject<MobilityModel>();
+        if (mob) {
+            Vector pos = mob->GetPosition();
+            g_posLog << currentTime << "," << (1000 + i) << "," << pos.x << "," << pos.y << "," << pos.z << ",1\n";
         }
     }
     Simulator::Schedule(Seconds(0.2), &LogPositions);
@@ -503,7 +497,12 @@ void ApplyResourceAssignments() {
             
             // ChannelTuple = std::tuple<uint8_t, double(MHz_u), WifiPhyBand, uint8_t>
             // 802.11a 默认为 20MHz, 5GHz, primary20Index=0
-            phy->SetOperatingChannel(WifiPhy::ChannelTuple{channelNumber, 20.0, WIFI_PHY_BAND_5GHZ, 0});
+            
+            // [Fix] 检查 PHY 状态，避免在发送或切换中途强制切信道导致 NS_ASSERT 失败
+            // 必须确保既不在发也不在收，也不在切换中，才能更改频率
+            if (!phy->IsStateTx() && !phy->IsStateRx() && !phy->IsStateSwitching()) {
+                phy->SetOperatingChannel(WifiPhy::ChannelTuple{channelNumber, 20.0, WIFI_PHY_BAND_5GHZ, 0});
+            }
             
             // 2. 下发功率控制 (修改发射功率)
             double txPower = g_state.powerAssignment[i];
@@ -803,20 +802,138 @@ void CreateInterferenceNodes(Ptr<YansWifiChannel> channel, Ipv4AddressHelper& ip
 {
     if (!g_diffParams.enableInterference || g_diffParams.numInterferenceNodes == 0) return;
 
-    std::cout << "创建 " << g_diffParams.numInterferenceNodes << " 个无赖干扰节点(黑飞)..." << std::endl;
-    
-    NodeContainer interferenceNodes;
-    interferenceNodes.Create(g_diffParams.numInterferenceNodes);
-    
-    // 干扰节点位置：随机固定在区域内
+    std::cout << "创建 " << g_diffParams.numInterferenceNodes
+              << " 个动态黑飞节点 (随机漂移飞行)..." << std::endl;
+
+    g_interferenceNodes.Create(g_diffParams.numInterferenceNodes);
+
+    // ── 移动模型：WaypointMobilityModel 实现平滑随机漂移飞行 ──
     MobilityHelper mobility;
-    mobility.SetPositionAllocator("ns3::RandomBoxPositionAllocator",
-        "X", StringValue("ns3::UniformRandomVariable[Min=0.0|Max=" + std::to_string(g_config.areaSize) + "]"),
-        "Y", StringValue("ns3::UniformRandomVariable[Min=0.0|Max=" + std::to_string(g_config.areaSize) + "]"),
-        "Z", StringValue("ns3::UniformRandomVariable[Min=" + std::to_string(g_config.uavHeight - 10) + "|Max=" + std::to_string(g_config.uavHeight + 10) + "]"));
-    mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
-    mobility.Install(interferenceNodes);
-    
+    mobility.SetMobilityModel("ns3::WaypointMobilityModel");
+    mobility.Install(g_interferenceNodes);
+
+    Ptr<UniformRandomVariable> rng = CreateObject<UniformRandomVariable>();
+    double margin           = 20.0;               // 边界安全距离 (m)
+    double area             = g_config.areaSize;
+    double baseZ            = g_config.uavHeight; // 与无人机集群初始高度一致
+    double waypointInterval = 15.0;               // 每15秒生成一个随机航路点
+
+    for (uint32_t i = 0; i < g_interferenceNodes.GetN(); ++i) {
+        Ptr<WaypointMobilityModel> wpm =
+            g_interferenceNodes.Get(i)->GetObject<WaypointMobilityModel>();
+        
+        // --- 修复初始位置 ---
+        double curX, curY, curZ;
+        int initRetries = 20;
+        
+        while (initRetries-- > 0) {
+            curX = rng->GetValue(margin, area - margin);
+            curY = rng->GetValue(margin, area - margin);
+            curZ = rng->GetValue(baseZ - 5.0, baseZ + 5.0);
+            
+            bool inside = false;
+            for (BuildingList::Iterator bit = BuildingList::Begin(); bit != BuildingList::End(); ++bit) {
+                Box box = (*bit)->GetBoundaries();
+                // 扩宽检测边界
+                if (curX >= box.xMin - 2 && curX <= box.xMax + 2 &&
+                    curY >= box.yMin - 2 && curY <= box.yMax + 2 &&
+                    curZ <= box.zMax + 2) {
+                    inside = true;
+                    // 若就在楼里，尝试抬升到楼顶
+                    if (initRetries < 5) { 
+                        curZ = box.zMax + 10.0; // 直接放到楼顶上
+                        inside = false; // 接受这个位置
+                    }
+                    break;
+                }
+            }
+            if (!inside) {
+                break;
+            }
+        }
+        // 如果实在找不到，就用默认高度但可能碰运气
+        
+        wpm->AddWaypoint(Waypoint(Seconds(0.0), Vector(curX, curY, curZ)));
+
+        // --- 生成随机游走轨迹 ---
+        for (double t = waypointInterval; t <= g_config.duration; t += waypointInterval) {
+            int maxRetries = 15; // 增加重试次数
+            bool validMove = false;
+            
+            double bestX = curX, bestY = curY, bestZ = curZ;
+            
+            while (maxRetries-- > 0) {
+                // 随机生成
+                double candX = curX + rng->GetValue(-60.0, 60.0);
+                double candY = curY + rng->GetValue(-60.0, 60.0);
+                double candZ = curZ + rng->GetValue(-5.0, 5.0);
+                
+                // 边界回弹
+                if (candX < margin) candX = margin + 10;
+                if (candX > area - margin) candX = area - margin - 10;
+                if (candY < margin) candY = margin + 10;
+                if (candY > area - margin) candY = area - margin - 10;
+                candZ = std::max(baseZ - 10.0, std::min(baseZ + 20.0, candZ)); // 允许更高一点以便翻越
+
+                // --- 关键修复：全路径碰撞检测 ---
+                // 不仅检查终点，还检查起点到终点的连线是否穿过任何建筑物
+                bool pathBlocked = false;
+                
+                Vector p1(curX, curY, curZ);
+                Vector p2(candX, candY, candZ);
+                double dist = std::sqrt(std::pow(p2.x - p1.x, 2) + std::pow(p2.y - p1.y, 2) + std::pow(p2.z - p1.z, 2));
+                int steps = std::max(2, (int)(dist / 5.0)); // 每5米检测一次
+                
+                for (int s = 1; s <= steps; ++s) { // s=0 是起点(已知安全), s=steps 是终点
+                    double alpha = (double)s / steps;
+                    double checkX = p1.x + alpha * (p2.x - p1.x);
+                    double checkY = p1.y + alpha * (p2.y - p1.y);
+                    double checkZ = p1.z + alpha * (p2.z - p1.z);
+                    
+                    for (BuildingList::Iterator bit = BuildingList::Begin(); bit != BuildingList::End(); ++bit) {
+                        Box box = (*bit)->GetBoundaries();
+                        // 包含安全边距
+                        if (checkX >= box.xMin - 2.0 && checkX <= box.xMax + 2.0 &&
+                            checkY >= box.yMin - 2.0 && checkY <= box.yMax + 2.0 &&
+                            checkZ <= box.zMax + 2.0) { // +2m 垂直余量
+                            pathBlocked = true;
+                            
+                            // 紧急避险策略：如果路径被挡，尝试大幅抬升终点高度以飞越
+                            // 只有当这是最后几次尝试时才启用，否则优先尝试换方向
+                            if (maxRetries < 3) {
+                                candZ = box.zMax + 8.0; 
+                                // 注意：只改终点高度不一定能保证中间点不撞(斜线)，
+                                // 但对于随机游走来说，下一轮迭代会重新计算路径检测
+                                // 这里我们标记这次尝试失败，让下一轮用新的 Z 重新检测
+                                // 或者更简单：直接在此处跳出并重试，但保留这个较高的Z作为启发？
+                                // 简单起见，这里只做标记，让外部重试去寻找不撞的路径
+                            }
+                            break; 
+                        }
+                    }
+                    if (pathBlocked) break;
+                }
+                
+                if (!pathBlocked) {
+                    bestX = candX; bestY = candY; bestZ = candZ;
+                    validMove = true;
+                    break;
+                }
+            }
+            
+            // 如果尝试多次都无法移动（被困住），则原地垂直爬升/悬停
+            if (!validMove) {
+                // 原地不动或缓慢向上漂移以脱困
+               bestX = curX; 
+               bestY = curY; 
+               bestZ = curZ + 2.0; // 慢慢向上飘，总能飞出去
+            }
+
+            curX = bestX; curY = bestY; curZ = bestZ;
+            wpm->AddWaypoint(Waypoint(Seconds(t), Vector(curX, curY, curZ)));
+        }
+    }
+
     WifiHelper wifi; // 干扰节点使用相同标准发包
     wifi.SetStandard(WIFI_STANDARD_80211a);
     wifi.SetRemoteStationManager("ns3::ConstantRateWifiManager",
@@ -830,16 +947,16 @@ void CreateInterferenceNodes(Ptr<YansWifiChannel> channel, Ipv4AddressHelper& ip
     
     WifiMacHelper mac;
     mac.SetType("ns3::AdhocWifiMac");
-    NetDeviceContainer interferenceDevices = wifi.Install(phy, mac, interferenceNodes);
+    NetDeviceContainer interferenceDevices = wifi.Install(phy, mac, g_interferenceNodes);
     
     InternetStackHelper stack;
-    stack.Install(interferenceNodes);
+    stack.Install(g_interferenceNodes);
     
     // 使用传入的 ipv4 统一分配，避免子网冲突
     Ipv4InterfaceContainer interferenceInterfaces = ipv4.Assign(interferenceDevices);
     
     uint16_t port = 8888;
-    for (uint32_t i = 0; i < interferenceNodes.GetN(); ++i) {
+    for (uint32_t i = 0; i < g_interferenceNodes.GetN(); ++i) {
         // 垃圾广播
         std::string dataRate = "500kbps";
         double onTime = 0.1;
@@ -865,7 +982,7 @@ void CreateInterferenceNodes(Ptr<YansWifiChannel> channel, Ipv4AddressHelper& ip
         onoff.SetAttribute("OnTime", StringValue("ns3::ConstantRandomVariable[Constant=" + std::to_string(onTime) + "]"));
         onoff.SetAttribute("OffTime", StringValue("ns3::ConstantRandomVariable[Constant=" + std::to_string(offTime) + "]"));
         
-        ApplicationContainer app = onoff.Install(interferenceNodes.Get(i));
+        ApplicationContainer app = onoff.Install(g_interferenceNodes.Get(i));
         app.Start(Seconds(1.0));
         app.Stop(Seconds(g_config.duration));
     }
@@ -956,7 +1073,7 @@ int main(int argc, char *argv[])
     g_transLog.open(g_config.outputDir + "/rtk-node-transmissions.csv");
     
     // 写入CSV表头
-    g_posLog << "time,nodeId,x,y,z\n";
+    g_posLog << "time,nodeId,x,y,z,node_type\n";
     g_transLog << "time,nodeId,eventType\n";
     g_resourceDetailedLog << "time,node_id,channel,tx_power,data_rate,neighbors,interference\n";
     g_topologyDetailedLog << "time,num_nodes,num_links,avg_degree,network_density\n";
@@ -1088,9 +1205,6 @@ int main(int argc, char *argv[])
     ipv4.SetBase("10.1.1.0", "255.255.255.0");
     Ipv4InterfaceContainer interfaces = ipv4.Assign(devices);
     
-    // 创建恶意干扰节点 (Phase 4)
-    CreateInterferenceNodes(theChannel, ipv4);
-    
     // Phase 5: 生成实体建筑障碍物并安装感知
     if (hasBuildings) {
         std::cout << "🚧 正在从 " << mapFile << " 加载三维物理实体建筑..." << std::endl;
@@ -1113,6 +1227,9 @@ int main(int argc, char *argv[])
         // 赋予全网节点空间建筑感知交互能力，开启真实物理遮蔽阻断
         BuildingsHelper::Install(NodeContainer::GetGlobal());
     }
+
+    // 创建恶意干扰节点 (Phase 4) - 移至建筑加载后以便避障
+    CreateInterferenceNodes(theChannel, ipv4);
     
     // 设置路由协议 (OLSR)
     Ipv4GlobalRoutingHelper::PopulateRoutingTables();
@@ -1151,9 +1268,10 @@ int main(int argc, char *argv[])
     Simulator::Schedule(Seconds(0.0), &LogTopologyChange);
     Simulator::Schedule(Seconds(0.0), &LogPositions); // 启动位置记录
     
-    // 设置包收发记录
-    Config::Connect("/NodeList/*/$ns3::Ipv4L3Protocol/Tx", MakeCallback(&Ipv4RxTxTracer));
-    Config::Connect("/NodeList/*/$ns3::Ipv4L3Protocol/Rx", MakeCallback(&Ipv4RxTxTracer));
+    // 设置包收发记录 (性能瓶颈: 每一包都写磁盘，严重拖慢仿真)
+    // 如需调试丢包细节，请取消注释
+    // Config::Connect("/NodeList/*/$ns3::Ipv4L3Protocol/Tx", MakeCallback(&Ipv4RxTxTracer));
+    // Config::Connect("/NodeList/*/$ns3::Ipv4L3Protocol/Rx", MakeCallback(&Ipv4RxTxTracer));
     
     // 运行仿真
     std::cout << "\n开始仿真..." << std::endl;

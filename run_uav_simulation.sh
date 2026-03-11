@@ -46,20 +46,18 @@ cd "${NS3_DIR}" || exit 1
 # 检查是否需要编译
 echo ""
 echo "检查编译状态..."
-# if [ ! -f "${BUILD_DIR}/scratch/ns3.43-uav_resource_allocation_advanced-default" ]; then
-if [ ! -f "${BUILD_DIR}/scratch/ns3.43-uav_resource_allocation-default" ]; then
-    echo "需要编译仿真程序..."
-    ./ns3 configure --enable-examples --enable-tests
-    ./ns3 build
-    
-    if [ $? -ne 0 ]; then
-        echo "编译失败！"
-        exit 1
-    fi
-    echo "编译成功！"
-else
-    echo "程序已编译，跳过编译步骤"
+
+# 自动通过 ns3 工具链进行构建管理 (移除硬编码的 configure，保留当前编译配置)
+echo "正在调用 ns3 build..."
+./ns3 build uav_resource_allocation
+
+if [ $? -ne 0 ]; then
+    echo "编译失败！"
+    exit 1
 fi
+echo "编译/检查完成"
+
+# if [ ! -f "${BUILD_DIR}/scratch/ns3.43-uav_resource_allocation-default" ]; then
 
 # 运行仿真
 echo ""

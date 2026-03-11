@@ -1,0 +1,42 @@
+{
+  "simulation_info": {
+    "data_directory": "output/run_be14cb03",
+    "analysis_date": "2026-03-09 20:22:25"
+  },
+  "qos_performance": {
+    "avg_pdr": 0.2780926573643411,
+    "min_pdr": 0.0,
+    "max_pdr": 0.49224806201550386,
+    "std_pdr": 0.22805723915536966,
+    "avg_delay_ms": 0.7744445488372094,
+    "min_delay_ms": 0.0,
+    "max_delay_ms": 4.103467868217055,
+    "std_delay_ms": 1.012009850066586,
+    "avg_throughput_mbps": 0.05362630659431525,
+    "total_throughput_mbps": 0.8043945989147288,
+    "std_throughput_mbps": 0.043944524791118635
+  },
+  "resource_allocation": {
+    "channel_distribution": {
+      "0": 338,
+      "1": 26,
+      "2": 26
+    },
+    "avg_power": 13.51665230769231,
+    "min_power": 12.4586,
+    "max_power": 14.8793,
+    "std_power": 0.6383913734045396,
+    "avg_rate": 9.241674666666668,
+    "min_rate": 8.56036,
+    "max_rate": 9.77072,
+    "std_rate": 0.3191967756846427,
+    "avg_interference": 0.07999999999999999,
+    "max_interference": 0.08
+  },
+  "topology_evolution": {
+    "avg_links": 105.0,
+    "min_links": 105,
+    "max_links": 105,
+    "avg_connectivity": 1.0
+  }
+}

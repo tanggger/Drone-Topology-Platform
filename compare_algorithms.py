@@ -17,8 +17,15 @@ from pathlib import Path
 import argparse
 
 # 配置matplotlib
-plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans']
+import matplotlib.font_manager as fm
+# 自动选择最佳可用中文字体
+available_fonts = set(f.name for f in fm.fontManager.ttflist)
+font_candidates = ['SimHei', 'Microsoft YaHei', 'WenQuanYi Micro Hei', 'WenQuanYi Zen Hei', 'DejaVu Sans', 'Arial Unicode MS']
+selected = next((f for f in font_candidates if f in available_fonts), 'sans-serif')
+plt.rcParams['font.sans-serif'] = [selected]
 plt.rcParams['axes.unicode_minus'] = False
+import logging
+logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
 
 class AlgorithmComparator:
     def __init__(self, result_dirs):
