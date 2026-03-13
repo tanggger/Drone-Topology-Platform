@@ -36,6 +36,9 @@ plt.rcParams['axes.unicode_minus'] = False
 # 屏蔽字体查找警告
 import logging
 logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
+# 屏蔽 Glyph missing 警告
+import warnings
+warnings.filterwarnings("ignore", module="matplotlib")
 
 sns.set_style("whitegrid")
 

@@ -1,0 +1,40 @@
+{
+  "simulation_info": {
+    "data_directory": "output/run_eeedf40c",
+    "analysis_date": "2026-03-14 01:27:28"
+  },
+  "qos_performance": {
+    "avg_pdr": 0.45656027604773464,
+    "min_pdr": 0.24903590807038836,
+    "max_pdr": 0.7923561316747573,
+    "std_pdr": 0.16751158006912573,
+    "avg_delay_ms": 312.74521895550157,
+    "min_delay_ms": 115.16894570995147,
+    "max_delay_ms": 474.66628974514566,
+    "std_delay_ms": 99.48301204660903,
+    "avg_throughput_mbps": 0.08439882783171519,
+    "total_throughput_mbps": 1.265982417475728,
+    "std_throughput_mbps": 0.03308808986730647
+  },
+  "resource_allocation": {
+    "channel_distribution": {
+      "0": 24720
+    },
+    "avg_power": 20.0,
+    "min_power": 20,
+    "max_power": 20,
+    "std_power": 0.0,
+    "avg_rate": 6.0,
+    "min_rate": 6,
+    "max_rate": 6,
+    "std_rate": 0.0,
+    "avg_interference": 0.15657200647249192,
+    "max_interference": 0.16
+  },
+  "topology_evolution": {
+    "avg_links": 102.42900485436893,
+    "min_links": 95,
+    "max_links": 105,
+    "avg_connectivity": 0.9755145570388349
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "config_hash": "6e61d604216742da092b4d63d5bb5575",
+  "params": {
+    "num_drones": 15,
+    "formation": "v_formation",
+    "start": "0,0,30",
+    "target": "500,500,30",
+    "difficulty": "Moderate",
+    "strategy": "dynamic",
+    "buildings": [],
+    "map_name": "map"
+  },
+  "source_task_id": "7842755f"
+}

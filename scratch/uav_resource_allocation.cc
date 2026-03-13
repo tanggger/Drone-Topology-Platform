@@ -22,6 +22,7 @@
 #include "ns3/applications-module.h"
 #include "ns3/flow-monitor-module.h"
 #include "ns3/buildings-module.h"
+#include "ns3/olsr-helper.h"
 #include <iostream>
 #include <fstream>
 #include <vector>
@@ -89,6 +90,71 @@ Vector ApplyRTKNoise(const Vector& originalPos, double time)
     return noisyPos;
 }
 
+// ==================== 资源分配配置 ====================
+struct ResourceAllocationConfig {
+    // 仿真基础参数
+    double duration = 200.0;              // 仿真时长(秒)
+    uint32_t numUAVs = 15;                // UAV节点数量
+    
+    // 网络配置
+    uint32_t numChannels = 3;             // 可用信道数量
+    double txPowerMin = 10.0;             // 最小发射功率(dBm)
+    double txPowerMax = 30.0;             // 最大发射功率(dBm)
+    double dataRateMin = 1.0;             // 最小数据速率(Mbps)
+    double dataRateMax = 11.0;            // 最大数据速率(Mbps)
+    
+    // QoS要求
+    double targetPDR = 0.85;              // 目标分组投递率 (85%)
+    double maxEndToEndDelay = 0.100;      // 最大端到端时延 (100ms)
+    double minThroughput = 500000.0;      // 最小吞吐量 (500 Kbps)
+    
+    // 资源分配策略
+    std::string allocationStrategy = "dynamic";  // dynamic, static, greedy, rl-based
+    double reallocationInterval = 5.0;    // 资源重分配间隔(秒)
+    
+    // 拓扑参数
+    double areaSize = 500.0;              // 仿真区域大小(米) (Legacy)
+    double minX = 0.0, maxX = 500.0;      // 场景X轴边界
+    double minY = 0.0, maxY = 500.0;      // 场景Y轴边界
+    double uavHeight = 50.0;              // UAV飞行高度(米)
+    double maxSpeed = 20.0;               // 最大飞行速度(m/s)
+    
+    // 业务负载
+    std::string trafficPattern = "mixed"; // cbr, poisson, mixed
+    double packetSize = 1024;             // 数据包大小(字节)
+    double packetRate = 100.0;            // 数据包发送速率(packets/s)
+    
+    // 输出配置
+    std::string outputDir = "output/resource_allocation";
+    bool enableVisualization = false;
+};
+
+// ==================== 资源分配状态 ====================
+struct ResourceAllocationState {
+    // 信道分配: nodeId -> channelId
+    std::map<uint32_t, uint32_t> channelAssignment;
+    
+    // 功率分配: nodeId -> txPower (dBm)
+    std::map<uint32_t, double> powerAssignment;
+    
+    // 数据速率分配: nodeId -> dataRate (Mbps)
+    std::map<uint32_t, double> rateAssignment;
+    
+    // 链路质量: (srcId, dstId) -> linkQuality [0,1]
+    std::map<std::pair<uint32_t, uint32_t>, double> linkQuality;
+    
+    // 性能指标
+    std::map<uint32_t, double> nodePDR;          // 节点分组投递率
+    std::map<uint32_t, double> nodeDelay;        // 节点平均时延
+    std::map<uint32_t, double> nodeThroughput;   // 节点吞吐量
+    
+    // 拓扑信息
+    std::vector<std::vector<bool>> adjacencyMatrix;  // 邻接矩阵
+    std::map<uint32_t, std::vector<uint32_t>> neighbors; // 邻居列表
+};
+
+ResourceAllocationConfig g_config;
+
 // 从 data_rtk/ 加载编队轨迹文件
 bool LoadFormationTrajectory(const std::string& filename)
 {
@@ -106,6 +172,11 @@ bool LoadFormationTrajectory(const std::string& filename)
 
     double maxTime = 0.0;
     uint32_t maxNodeId = 0;
+    
+    // 初始化边界，以便在读取轨迹时更新
+    // 如果没有点数据，使用默认 0~500
+    // 读取到一个点后，立即更新 min/max
+    bool firstPoint = true;
 
     while (std::getline(file, line)) {
         if (line.empty() || line[0] == '#') continue;
@@ -131,9 +202,35 @@ bool LoadFormationTrajectory(const std::string& filename)
 
             maxTime   = std::max(maxTime, point.time);
             maxNodeId = std::max(maxNodeId, point.nodeId);
+            
+            // 更新场景边界
+            if (firstPoint) {
+                g_config.minX = point.x;
+                g_config.maxX = point.x;
+                g_config.minY = point.y;
+                g_config.maxY = point.y;
+                firstPoint = false;
+            } else {
+                if (point.x < g_config.minX) g_config.minX = point.x;
+                if (point.x > g_config.maxX) g_config.maxX = point.x;
+                if (point.y < g_config.minY) g_config.minY = point.y;
+                if (point.y > g_config.maxY) g_config.maxY = point.y;
+            }
         }
     }
     file.close();
+
+    // 适当扩充边界，给黑飞留点周围空间
+    // Fix: 不能无限扩充，必须限制在用户指定的地图边界内（如果有）
+    // 或者仅仅扩充一个很小的值，避免飞出去太远
+    double margin = 10.0;
+    g_config.minX -= margin;
+    g_config.maxX += margin;
+    g_config.minY -= margin;
+    g_config.maxY += margin;
+    
+    std::cout << "场景边界已更新: X[" << g_config.minX << ", " << g_config.maxX 
+              << "] Y[" << g_config.minY << ", " << g_config.maxY << "]" << std::endl;
 
     // 按时间排序并去除非严格递增的时间点
     for (auto& entry : g_nodeTrajectories) {
@@ -199,68 +296,9 @@ void SetupFormationMobility(NodeContainer& nodes)
 }
 
 // ==================== 资源分配配置 ====================
-struct ResourceAllocationConfig {
-    // 仿真基础参数
-    double duration = 200.0;              // 仿真时长(秒)
-    uint32_t numUAVs = 15;                // UAV节点数量
-    
-    // 网络配置
-    uint32_t numChannels = 3;             // 可用信道数量
-    double txPowerMin = 10.0;             // 最小发射功率(dBm)
-    double txPowerMax = 30.0;             // 最大发射功率(dBm)
-    double dataRateMin = 1.0;             // 最小数据速率(Mbps)
-    double dataRateMax = 11.0;            // 最大数据速率(Mbps)
-    
-    // QoS要求
-    double targetPDR = 0.85;              // 目标分组投递率 (85%)
-    double maxEndToEndDelay = 0.100;      // 最大端到端时延 (100ms)
-    double minThroughput = 500000.0;      // 最小吞吐量 (500 Kbps)
-    
-    // 资源分配策略
-    std::string allocationStrategy = "dynamic";  // dynamic, static, greedy, rl-based
-    double reallocationInterval = 5.0;    // 资源重分配间隔(秒)
-    
-    // 拓扑参数
-    double areaSize = 500.0;              // 仿真区域大小(米)
-    double uavHeight = 50.0;              // UAV飞行高度(米)
-    double maxSpeed = 20.0;               // 最大飞行速度(m/s)
-    
-    // 业务负载
-    std::string trafficPattern = "mixed"; // cbr, poisson, mixed
-    double packetSize = 1024;             // 数据包大小(字节)
-    double packetRate = 100.0;            // 数据包发送速率(packets/s)
-    
-    // 输出配置
-    std::string outputDir = "output/resource_allocation";
-    bool enableVisualization = false;
-};
+// struct ResourceAllocationConfig 已移动到稳健位置 (见顶部)
 
-// ==================== 资源分配状态 ====================
-struct ResourceAllocationState {
-    // 信道分配: nodeId -> channelId
-    std::map<uint32_t, uint32_t> channelAssignment;
-    
-    // 功率分配: nodeId -> txPower (dBm)
-    std::map<uint32_t, double> powerAssignment;
-    
-    // 数据速率分配: nodeId -> dataRate (Mbps)
-    std::map<uint32_t, double> rateAssignment;
-    
-    // 链路质量: (srcId, dstId) -> linkQuality [0,1]
-    std::map<std::pair<uint32_t, uint32_t>, double> linkQuality;
-    
-    // 性能指标
-    std::map<uint32_t, double> nodePDR;          // 节点分组投递率
-    std::map<uint32_t, double> nodeDelay;        // 节点平均时延
-    std::map<uint32_t, double> nodeThroughput;   // 节点吞吐量
-    
-    // 拓扑信息
-    std::vector<std::vector<bool>> adjacencyMatrix;  // 邻接矩阵
-    std::map<uint32_t, std::vector<uint32_t>> neighbors; // 邻居列表
-};
 
-// ==================== 全局变量 ====================
-ResourceAllocationConfig g_config;
 ResourceAllocationState g_state;
 NodeContainer g_uavNodes;
 NodeContainer g_interferenceNodes; // 黑飞节点全局容器 (CSV 中 nodeId 偏移量: +1000, node_type=1)
@@ -299,7 +337,8 @@ void LogPositions() {
             g_posLog << currentTime << "," << (1000 + i) << "," << pos.x << "," << pos.y << "," << pos.z << ",1\n";
         }
     }
-    Simulator::Schedule(Seconds(0.2), &LogPositions);
+    // Record positions every 0.1s to allow smooth animation
+    Simulator::Schedule(Seconds(0.1), &LogPositions);
 }
 
 // ==================== 资源分配算法 ====================
@@ -367,52 +406,94 @@ double EstimateLinkQuality(uint32_t srcId, uint32_t dstId) {
 }
 
 /**
- * \brief 动态信道分配算法
+ * \brief 干扰最小化信道分配算法
  * 
- * 采用图着色算法，避免相邻节点使用相同信道
+ * 对每个节点、每个候选信道计算"距离加权干扰分"，
+ * 选择干扰分最低的信道。自动实现负载均衡，
+ * 无需图着色（图着色在密集组网中必然失败）。
  */
 void DynamicChannelAllocation() {
-    NS_LOG_INFO("执行动态信道分配...");
+    NS_LOG_INFO("执行干扰最小化信道分配...");
     
     uint32_t n = g_uavNodes.GetN();
-    std::vector<uint32_t> channelUsage(g_config.numChannels, 0);
+    double commRange = 150.0;
     
-    // 按节点度数排序(度数大的优先分配)
+    // 清空旧分配，从头计算
+    g_state.channelAssignment.clear();
+    
+    // 按度数降序排列（核心节点优先分配）
     std::vector<std::pair<uint32_t, uint32_t>> nodeDegrees;
     for (uint32_t i = 0; i < n; ++i) {
-        uint32_t degree = g_state.neighbors[i].size();
-        nodeDegrees.push_back({degree, i});
+        nodeDegrees.push_back({(uint32_t)g_state.neighbors[i].size(), i});
     }
     std::sort(nodeDegrees.rbegin(), nodeDegrees.rend());
     
-    // 为每个节点分配信道
     for (auto& [degree, nodeId] : nodeDegrees) {
-        std::vector<bool> usedChannels(g_config.numChannels, false);
+        // 对每个信道计算干扰分
+        // 干扰分 = Σ (已分配到该信道的邻居的距离权重)
+        // 距离越近权重越大，同频邻居越多分越高
+        std::vector<double> channelScore(g_config.numChannels, 0.0);
         
-        // 标记邻居节点使用的信道
-        for (uint32_t neighborId : g_state.neighbors[nodeId]) {
-            if (g_state.channelAssignment.find(neighborId) != g_state.channelAssignment.end()) {
-                uint32_t ch = g_state.channelAssignment[neighborId];
-                usedChannels[ch] = true;
-            }
+        // 统计每信道的全局负载（用于打破平局时的负载均衡）
+        std::vector<uint32_t> channelLoad(g_config.numChannels, 0);
+        for (auto& [nid, ch] : g_state.channelAssignment) {
+            channelLoad[ch]++;
         }
         
-        // 选择使用最少的可用信道
-        uint32_t bestChannel = 0;
-        uint32_t minUsage = channelUsage[0];
-        
         for (uint32_t ch = 0; ch < g_config.numChannels; ++ch) {
-            if (!usedChannels[ch] && channelUsage[ch] < minUsage) {
+            // 1. 邻居同频干扰（主要因素）
+            for (uint32_t neighborId : g_state.neighbors[nodeId]) {
+                auto it = g_state.channelAssignment.find(neighborId);
+                if (it != g_state.channelAssignment.end() && it->second == ch) {
+                    double dist = CalculateDistance(
+                        g_uavNodes.Get(nodeId), g_uavNodes.Get(neighborId));
+                    // 距离越近干扰越强（反比权重）
+                    double weight = std::max(0.0, 1.0 - dist / commRange);
+                    channelScore[ch] += weight * 10.0;  // 主权重 ×10
+                }
+            }
+            
+            // 2. 两跳邻居同频干扰（次要因素，防止隐藏终端）
+            for (uint32_t neighborId : g_state.neighbors[nodeId]) {
+                for (uint32_t twoHop : g_state.neighbors[neighborId]) {
+                    if (twoHop == nodeId) continue;
+                    auto it = g_state.channelAssignment.find(twoHop);
+                    if (it != g_state.channelAssignment.end() && it->second == ch) {
+                        double dist = CalculateDistance(
+                            g_uavNodes.Get(nodeId), g_uavNodes.Get(twoHop));
+                        if (dist < commRange * 1.5) {
+                            double weight = std::max(0.0, 1.0 - dist / (commRange * 1.5));
+                            channelScore[ch] += weight * 2.0;  // 次权重 ×2
+                        }
+                    }
+                }
+            }
+            
+            // 3. 全局负载均衡惩罚（打破平局）
+            channelScore[ch] += channelLoad[ch] * 0.1;
+        }
+        
+        // 选择干扰分最低的信道
+        uint32_t bestChannel = 0;
+        double minScore = channelScore[0];
+        for (uint32_t ch = 1; ch < g_config.numChannels; ++ch) {
+            if (channelScore[ch] < minScore) {
+                minScore = channelScore[ch];
                 bestChannel = ch;
-                minUsage = channelUsage[ch];
             }
         }
         
         g_state.channelAssignment[nodeId] = bestChannel;
-        channelUsage[bestChannel]++;
     }
     
-    NS_LOG_INFO("信道分配完成");
+    // 输出分配统计
+    std::vector<uint32_t> finalLoad(g_config.numChannels, 0);
+    for (auto& [nid, ch] : g_state.channelAssignment) finalLoad[ch]++;
+    std::string loadStr;
+    for (uint32_t ch = 0; ch < g_config.numChannels; ++ch) {
+        loadStr += "CH" + std::to_string(ch) + "=" + std::to_string(finalLoad[ch]) + " ";
+    }
+    NS_LOG_INFO("信道分配完成: " << loadStr);
 }
 
 /**
@@ -488,29 +569,23 @@ void ApplyResourceAssignments() {
         Ptr<WifiNetDevice> wifiDevice = DynamicCast<WifiNetDevice>(device);
         if (!wifiDevice) continue;
 
-        // 1. 下发信道分配 (直接修改物理层频率)
         Ptr<WifiPhy> phy = wifiDevice->GetPhy();
         if (phy) {
-            // NS-3 3.43 新写法: 设置工作信道
-            // 映射 0, 1, 2 -> 36, 40, 44 (5GHz UNII-1)
-            uint8_t channelNumber = 36 + g_state.channelAssignment[i] * 4;
-            
-            // ChannelTuple = std::tuple<uint8_t, double(MHz_u), WifiPhyBand, uint8_t>
-            // 802.11a 默认为 20MHz, 5GHz, primary20Index=0
-            
-            // [Fix] 检查 PHY 状态，避免在发送或切换中途强制切信道导致 NS_ASSERT 失败
-            // 必须确保既不在发也不在收，也不在切换中，才能更改频率
-            if (!phy->IsStateTx() && !phy->IsStateRx() && !phy->IsStateSwitching()) {
-                phy->SetOperatingChannel(WifiPhy::ChannelTuple{channelNumber, 20.0, WIFI_PHY_BAND_5GHZ, 0});
-            }
-            
-            // 2. 下发功率控制 (修改发射功率)
+            // 在单射频 Ad-hoc WiFi 中，所有节点必须在同一物理信道上
+            // 信道分配仅作为逻辑标记用于前端可视化和性能分析
+            // 
+            // uint8_t channelNumber = 36 + g_state.channelAssignment[i] * 4;
+            // if (!phy->IsStateTx() && !phy->IsStateRx() && !phy->IsStateSwitching()) {
+            //     phy->SetOperatingChannel(WifiPhy::ChannelTuple{channelNumber, 20.0, WIFI_PHY_BAND_5GHZ, 0});
+            // }
+
+            // ✅ 保留：功率控制（这个是安全的，不会破坏通信）
             double txPower = g_state.powerAssignment[i];
             phy->SetTxPowerStart(txPower);
             phy->SetTxPowerEnd(txPower);
         }
 
-        // 3. 下发速率调整 (修改速率管理器参数)
+        // ✅ 保留：速率调整
         Ptr<WifiRemoteStationManager> stationManager = wifiDevice->GetRemoteStationManager();
         if (stationManager) {
             std::string rateMode = "OfdmRate6Mbps";
@@ -532,30 +607,38 @@ void ApplyResourceAssignments() {
  */
 void PerformResourceReallocation() {
     double currentTime = Simulator::Now().GetSeconds();
-    NS_LOG_INFO("时间 " << currentTime << "s: 开始资源重分配");
+    // NS_LOG_INFO("时间 " << currentTime << "s: 开始资源重分配");
     
-    // 1. 更新拓扑信息
+    // 1. always Update Topology (10Hz) for accurate monitoring
     UpdateTopology();
+
+    // 2. Control Logic Frequency (2Hz = every 0.5s) to avoid PHY state conflicts
+    static int tickCount = 0;
+    bool executeLogic = (tickCount % 5 == 0);
+    tickCount++;
     
-    // 2. 如果策略是 dynamic，则执行智能抗干扰集群调度
-    if (g_config.allocationStrategy == "dynamic") {
-        // 执行信道分配
-        DynamicChannelAllocation();
+    if (executeLogic) {
+        NS_LOG_INFO("时间 " << currentTime << "s: 执行资源重分配逻辑 (2Hz)");
+        // 2. 如果策略是 dynamic，则执行智能抗干扰集群调度
+        if (g_config.allocationStrategy == "dynamic") {
+            // 执行信道分配
+            DynamicChannelAllocation();
+            
+            // 执行功率控制
+            DynamicPowerControl();
+            
+            // 执行速率调整
+            AdaptiveRateControl();
+        } else {
+            // static (Baseline): 啥都不干，坐以待毙（被干扰、被建筑物挡死）
+            NS_LOG_INFO("Baseline (static) 模式，保持固定粗放的资源分配");
+        }
         
-        // 执行功率控制
-        DynamicPowerControl();
-        
-        // 执行速率调整
-        AdaptiveRateControl();
-    } else {
-        // static (Baseline): 啥都不干，坐以待毙（被干扰、被建筑物挡死）
-        NS_LOG_INFO("Baseline (static) 模式，保持固定粗放的资源分配");
+        // 4.5 物理下发：让所有計算好的参数在此刻真实作用于模拟器
+        ApplyResourceAssignments();
     }
     
-    // 4.5 物理下发：让所有計算好的参数在此刻真实作用于模拟器
-    ApplyResourceAssignments();
-    
-    // 5. 记录资源分配结果 (简略版和详细版)
+    // 5. 记录资源分配结果 (所有时刻都记录，保持 10Hz 平滑输出)
     g_resourceLog << currentTime;
     for (uint32_t i = 0; i < g_uavNodes.GetN(); ++i) {
         g_resourceLog << "," << g_state.channelAssignment[i]
@@ -579,11 +662,15 @@ void PerformResourceReallocation() {
     }
     g_resourceLog << std::endl;
     
-    // 6. 调度下次重分配
-    Simulator::Schedule(Seconds(g_config.reallocationInterval), 
+    // 6. 调度下次重分配 (0.1s loop for data logging)
+    // Front-end requirement: 10Hz sampling
+    double nextInterval = 0.1;
+    Simulator::Schedule(Seconds(nextInterval), 
                         &PerformResourceReallocation);
     
-    NS_LOG_INFO("资源重分配完成");
+    if (executeLogic) {
+        NS_LOG_INFO("资源重分配完成");
+    }
 }
 
 // ==================== 性能监控 ====================
@@ -591,64 +678,96 @@ void PerformResourceReallocation() {
 /**
  * \brief 计算QoS性能指标
  */
+// ==================== 滑动窗口 QoS 监控 (2s window) ====================
+struct FlowCumulative {
+    uint64_t txPkts  = 0;
+    uint64_t rxPkts  = 0;
+    uint64_t rxBytes = 0;
+    double   delaySumS = 0.0;
+};
+
+static const int QOS_WINDOW = 20;  // 20 ticks × 0.1s = 2 秒滑动窗口
+static std::deque<std::map<FlowId, FlowCumulative>> g_cumHistory;
+
 void MonitorQoSPerformance() {
     double currentTime = Simulator::Now().GetSeconds();
-    
-    // 使用FlowMonitor收集统计数据
+
     g_flowMonitor->CheckForLostPackets();
     Ptr<Ipv4FlowClassifier> classifier = DynamicCast<Ipv4FlowClassifier>(
         g_flowHelper.GetClassifier());
-    
     FlowMonitor::FlowStatsContainer stats = g_flowMonitor->GetFlowStats();
-    
-    // 初始化性能指标和流计数(用于后续求平均)
-    std::map<uint32_t, uint32_t> flowCount; // srcId -> 流的数量
+
+    // 1. 拍摄当前累计快照
+    std::map<FlowId, FlowCumulative> snap;
+    for (auto& [fid, fs] : stats) {
+        FlowCumulative c;
+        c.txPkts    = fs.txPackets;
+        c.rxPkts    = fs.rxPackets;
+        c.rxBytes   = fs.rxBytes;
+        c.delaySumS = fs.delaySum.GetSeconds();
+        snap[fid] = c;
+    }
+
+    g_cumHistory.push_back(snap);
+    if ((int)g_cumHistory.size() > QOS_WINDOW) {
+        g_cumHistory.pop_front();
+    }
+
+    // 2. 取窗口最早的快照
+    const auto& oldSnap = g_cumHistory.front();
+    double windowSec = (double)g_cumHistory.size() * 0.1;
+    if (windowSec < 0.1) windowSec = 0.1;
+
+    // 3. 计算窗口内增量，聚合到节点
+    std::map<uint32_t, uint64_t> wTx, wRx, wBytes;
+    std::map<uint32_t, double>   wDelay;
     for (uint32_t i = 0; i < g_uavNodes.GetN(); ++i) {
-        g_state.nodePDR[i] = 0.0;
-        g_state.nodeDelay[i] = 0.0;
-        g_state.nodeThroughput[i] = 0.0;
-        flowCount[i] = 0;
+        wTx[i] = wRx[i] = wBytes[i] = 0;
+        wDelay[i] = 0.0;
     }
-    
-    // 统计每个流的性能
-    for (auto& [flowId, flowStats] : stats) {
-        if (flowStats.txPackets == 0) continue; // 跳过空流
-        
-        // 使用IP地址映射到节点ID (IP为 10.1.1.1 ~ 10.1.1.N)
-        Ipv4FlowClassifier::FiveTuple tuple = classifier->FindFlow(flowId);
+
+    for (auto& [fid, cur] : snap) {
+        Ipv4FlowClassifier::FiveTuple tuple = classifier->FindFlow(fid);
         uint32_t srcId = (tuple.sourceAddress.Get() & 0xFF) - 1;
-        if (srcId >= g_uavNodes.GetN()) continue; // 防越界
-        
-        // 计算PDR (本次流)
-        double pdr = (double)flowStats.rxPackets / flowStats.txPackets;
-        
-        // 计算平均时延 (本次流)
-        double delay = 0.0;
-        if (flowStats.rxPackets > 0) {
-            delay = flowStats.delaySum.GetSeconds() / flowStats.rxPackets;
+        if (srcId >= g_uavNodes.GetN()) continue;
+
+        uint64_t oldTx = 0, oldRx = 0, oldB = 0;
+        double   oldD  = 0.0;
+        auto it = oldSnap.find(fid);
+        if (it != oldSnap.end()) {
+            oldTx = it->second.txPkts;
+            oldRx = it->second.rxPkts;
+            oldB  = it->second.rxBytes;
+            oldD  = it->second.delaySumS;
         }
-        
-        // 计算吞吐量 bps (本次流, 基于接收字节)
-        double throughput = flowStats.rxBytes * 8.0 / currentTime;
-        
-        // ★ 关键修复: 累加后除以流数量，避免多流时最后一条覆盖前面
-        g_state.nodePDR[srcId]        = (g_state.nodePDR[srcId] * flowCount[srcId] + pdr) / (flowCount[srcId] + 1);
-        g_state.nodeDelay[srcId]      = (g_state.nodeDelay[srcId] * flowCount[srcId] + delay) / (flowCount[srcId] + 1);
-        g_state.nodeThroughput[srcId] += throughput; // 吞吐量直接累加(多流叠加)
-        flowCount[srcId]++;
+
+        wTx[srcId]    += (cur.txPkts  - oldTx);
+        wRx[srcId]    += (cur.rxPkts  - oldRx);
+        wBytes[srcId] += (cur.rxBytes - oldB);
+        wDelay[srcId] += (cur.delaySumS - oldD);
     }
-    
-    // 记录QoS性能
+
+    // 4. 计算每节点 QoS（无数据时保持上次值，避免跳零）
+    for (uint32_t i = 0; i < g_uavNodes.GetN(); ++i) {
+        if (wTx[i] > 0) {
+            g_state.nodePDR[i] = (double)wRx[i] / wTx[i];
+        }
+        if (wRx[i] > 0) {
+            g_state.nodeDelay[i] = wDelay[i] / wRx[i];
+        }
+        g_state.nodeThroughput[i] = wBytes[i] * 8.0 / windowSec;
+    }
+
+    // 5. 写 CSV
     g_qosLog << currentTime;
     for (uint32_t i = 0; i < g_uavNodes.GetN(); ++i) {
         g_qosLog << "," << g_state.nodePDR[i]
-                << "," << g_state.nodeDelay[i]
-                << "," << g_state.nodeThroughput[i];
+                 << "," << g_state.nodeDelay[i]
+                 << "," << g_state.nodeThroughput[i];
     }
     g_qosLog << std::endl;
-    
-    // 定期监控
-    Simulator::Schedule(Seconds(1.0), &MonitorQoSPerformance);
+
+    Simulator::Schedule(Seconds(0.1), &MonitorQoSPerformance);
 }
 
 /**
@@ -704,9 +823,9 @@ void LogTopologyChange() {
                           << numLinks << ","
                           << avg_degree << ","
                           << connectivity << "\n";
-    
-    // 定期记录 (由于大屏需要丝滑连线，改为 0.2s 频率，与坐标同步)
-    Simulator::Schedule(Seconds(0.2), &LogTopologyChange);
+
+    // Front-end expects sync between topology and positions
+    Simulator::Schedule(Seconds(0.1), &LogTopologyChange);
 }
 
 // ==================== 应用层业务生成 ====================
@@ -770,9 +889,10 @@ void SetupMixedTraffic() {
             PacketSinkHelper sink("ns3::UdpSocketFactory", 
                                   InetSocketAddress(Ipv4Address::GetAny(), port));
             ApplicationContainer sinkApp = sink.Install(g_uavNodes.Get(j));
+            // sinkApp.Start(Seconds(0.5));
+
             sinkApp.Start(Seconds(0.5));
             sinkApp.Stop(Seconds(g_config.duration));
-            
             // 发送端 (OnOff CBR) - 安装在源节点 i 上
             OnOffHelper onoff("ns3::UdpSocketFactory", 
                               InetSocketAddress(dstAddr, port));
@@ -784,7 +904,8 @@ void SetupMixedTraffic() {
             
             ApplicationContainer clientApp = onoff.Install(g_uavNodes.Get(i));
             // 每架飞机错开 0.1s 启动，彻底避免 ARP 广播风暴
-            clientApp.Start(Seconds(1.0 + i * 0.1));
+            // clientApp.Start(Seconds(1.0 + i * 0.1));
+            clientApp.Start(Seconds(2.0 + i * 0.05));
             clientApp.Stop(Seconds(g_config.duration));
             
             port++;
@@ -792,13 +913,13 @@ void SetupMixedTraffic() {
     }
     
     // 强制路由表在发包前初始化 (非常关键)
-    Ipv4GlobalRoutingHelper::PopulateRoutingTables();
+    // Ipv4GlobalRoutingHelper::PopulateRoutingTables();
     
     NS_LOG_INFO("混合业务与路由设置完成，共 " << (g_uavNodes.GetN() * 2) << " 条流");
 }
 
 // ==================== 创建恶意干扰/黑飞节点 (Phase 4) ====================
-void CreateInterferenceNodes(Ptr<YansWifiChannel> channel, Ipv4AddressHelper& ipv4)
+void CreateInterferenceNodes(Ptr<YansWifiChannel> channel)
 {
     if (!g_diffParams.enableInterference || g_diffParams.numInterferenceNodes == 0) return;
 
@@ -827,9 +948,10 @@ void CreateInterferenceNodes(Ptr<YansWifiChannel> channel, Ipv4AddressHelper& ip
         int initRetries = 20;
         
         while (initRetries-- > 0) {
-            curX = rng->GetValue(margin, area - margin);
-            curY = rng->GetValue(margin, area - margin);
-            curZ = rng->GetValue(baseZ - 5.0, baseZ + 5.0);
+            // 使用动态计算的场景边界，而非固定的 areaSize
+            curX = rng->GetValue(g_config.minX + margin, g_config.maxX - margin);
+            curY = rng->GetValue(g_config.minY + margin, g_config.maxY - margin);
+            curZ = rng->GetValue(baseZ - 10.0, baseZ + 10.0);
             
             bool inside = false;
             for (BuildingList::Iterator bit = BuildingList::Begin(); bit != BuildingList::End(); ++bit) {
@@ -856,6 +978,7 @@ void CreateInterferenceNodes(Ptr<YansWifiChannel> channel, Ipv4AddressHelper& ip
         wpm->AddWaypoint(Waypoint(Seconds(0.0), Vector(curX, curY, curZ)));
 
         // --- 生成随机游走轨迹 ---
+        (void)area; // 消除 unused variable 警告
         for (double t = waypointInterval; t <= g_config.duration; t += waypointInterval) {
             int maxRetries = 15; // 增加重试次数
             bool validMove = false;
@@ -864,16 +987,16 @@ void CreateInterferenceNodes(Ptr<YansWifiChannel> channel, Ipv4AddressHelper& ip
             
             while (maxRetries-- > 0) {
                 // 随机生成
-                double candX = curX + rng->GetValue(-60.0, 60.0);
-                double candY = curY + rng->GetValue(-60.0, 60.0);
-                double candZ = curZ + rng->GetValue(-5.0, 5.0);
+                double candX = curX + rng->GetValue(-100.0, 100.0); // 增大游走步长
+                double candY = curY + rng->GetValue(-100.0, 100.0);
+                double candZ = curZ + rng->GetValue(-10.0, 10.0);
                 
-                // 边界回弹
-                if (candX < margin) candX = margin + 10;
-                if (candX > area - margin) candX = area - margin - 10;
-                if (candY < margin) candY = margin + 10;
-                if (candY > area - margin) candY = area - margin - 10;
-                candZ = std::max(baseZ - 10.0, std::min(baseZ + 20.0, candZ)); // 允许更高一点以便翻越
+                // 边界回弹 (使用动态边界)
+                if (candX < g_config.minX + margin) candX = g_config.minX + margin + 10;
+                if (candX > g_config.maxX - margin) candX = g_config.maxX - margin - 10;
+                if (candY < g_config.minY + margin) candY = g_config.minY + margin + 10;
+                if (candY > g_config.maxY - margin) candY = g_config.maxY - margin - 10;
+                candZ = std::max(baseZ - 15.0, std::min(baseZ + 30.0, candZ));
 
                 // --- 关键修复：全路径碰撞检测 ---
                 // 不仅检查终点，还检查起点到终点的连线是否穿过任何建筑物
@@ -953,7 +1076,10 @@ void CreateInterferenceNodes(Ptr<YansWifiChannel> channel, Ipv4AddressHelper& ip
     stack.Install(g_interferenceNodes);
     
     // 使用传入的 ipv4 统一分配，避免子网冲突
-    Ipv4InterfaceContainer interferenceInterfaces = ipv4.Assign(interferenceDevices);
+    // Ipv4InterfaceContainer interferenceInterfaces = ipv4.Assign(interferenceDevices);
+    Ipv4AddressHelper interferenceIpv4;
+    interferenceIpv4.SetBase("10.2.1.0", "255.255.255.0");
+    Ipv4InterfaceContainer interferenceInterfaces = interferenceIpv4.Assign(interferenceDevices);
     
     uint16_t port = 8888;
     for (uint32_t i = 0; i < g_interferenceNodes.GetN(); ++i) {
@@ -1147,8 +1273,12 @@ int main(int argc, char *argv[])
     // Phase 4: 初始化难度参数
     g_diffParams.levelName = difficulty;
     if (difficulty == "Moderate") {
-        pathLossExp   = 2.7;
-        rxSensitivity = -82.0;
+        // pathLossExp   = 2.7;
+        // rxSensitivity = -82.0;
+        // txPower       = 23.0;
+
+        pathLossExp   = 2.5;     // 从 2.7 微调到 2.5
+        rxSensitivity = -85.0;   // 从 -82 改为 -85
         txPower       = 23.0;
         
         g_diffParams.rtkNoiseStdDev = 0.08;
@@ -1158,9 +1288,13 @@ int main(int argc, char *argv[])
         g_diffParams.enableInterference = true;
         g_diffParams.numInterferenceNodes = 8;
     } else if (difficulty == "Hard") {
-        pathLossExp   = 3.5;   // 对齐 benchmark Hard: 3.5, 4.2, 5 递进
-        rxSensitivity = -74.0; // 信号更难被接收
-        txPower       = 26.0;  // 适当增大发射功率以补偿损耗
+        // pathLossExp   = 3.5;   // 对齐 benchmark Hard: 3.5, 4.2, 5 递进
+        // rxSensitivity = -74.0; // 信号更难被接收
+        // txPower       = 26.0;  // 适当增大发射功率以补偿损耗
+
+        pathLossExp   = 3.0;     // 从 3.5 降到 3.0（城市环境合理值）
+        rxSensitivity = -82.0;   // 从 -74 改为 -82（仍比 Easy 的 -90 差）
+        txPower       = 26.0;    // 不变
         
         g_diffParams.rtkNoiseStdDev = 0.2;
         g_diffParams.rtkDriftInterval = 8.0;
@@ -1197,7 +1331,12 @@ int main(int argc, char *argv[])
     NetDeviceContainer devices = wifi.Install(wifiPhy, wifiMac, g_uavNodes);
     
     // 安装网络协议栈
+    OlsrHelper olsr;
+    Ipv4ListRoutingHelper routingList;
+    routingList.Add(olsr, 10);  // 优先级 10
+
     InternetStackHelper internet;
+    internet.SetRoutingHelper(routingList);
     internet.Install(g_uavNodes);
     
     // 分配IP地址
@@ -1209,6 +1348,9 @@ int main(int argc, char *argv[])
     if (hasBuildings) {
         std::cout << "🚧 正在从 " << mapFile << " 加载三维物理实体建筑..." << std::endl;
         std::ifstream bFile(mapFile);
+        bool firstBuilding = true;
+        double bMinX = 0, bMaxX = 0, bMinY = 0, bMaxY = 0;
+        
         if (bFile.is_open()) {
             std::string line;
             while (std::getline(bFile, line)) {
@@ -1218,27 +1360,60 @@ int main(int argc, char *argv[])
                 if (iss >> x1 >> x2 >> y1 >> y2 >> z1 >> z2) {
                     Ptr<Building> building = CreateObject<Building>();
                     building->SetBoundaries(Box(x1, x2, y1, y2, z1, z2));
-                    building->SetExtWallsType(Building::ConcreteWithWindows); // 钢筋混凝土强遮蔽
-                    building->SetNFloors(std::max(1, (int)(z2 / 3.0))); // 每层按3米算
+                    building->SetExtWallsType(Building::ConcreteWithWindows);
+                    building->SetNFloors(std::max(1, (int)(z2 / 3.0)));
+                    
+                    // ★ 追踪建筑物覆盖范围
+                    if (firstBuilding) {
+                        bMinX = x1; bMaxX = x2;
+                        bMinY = y1; bMaxY = y2;
+                        firstBuilding = false;
+                    } else {
+                        bMinX = std::min(bMinX, x1);
+                        bMaxX = std::max(bMaxX, x2);
+                        bMinY = std::min(bMinY, y1);
+                        bMaxY = std::max(bMaxY, y2);
+                    }
                 }
             }
         }
         
-        // 赋予全网节点空间建筑感知交互能力，开启真实物理遮蔽阻断
-        BuildingsHelper::Install(NodeContainer::GetGlobal());
+        // ★ 用建筑物范围扩展场景边界
+        if (!firstBuilding) {
+            // Fix: 紧贴建筑物边界，不要过度扩充，以免黑飞生成在地图外
+            double mapMargin = 5.0;  
+            
+            // 如果加载了地图，以地图边界为主（覆盖轨迹边界）
+            // 但如果轨迹超出了地图(比如飞出去了)，还是要保留轨迹边界防止出错
+            g_config.minX = std::min(g_config.minX, bMinX - mapMargin);
+            g_config.maxX = std::max(g_config.maxX, bMaxX + mapMargin);
+            g_config.minY = std::min(g_config.minY, bMinY - mapMargin);
+            g_config.maxY = std::max(g_config.maxY, bMaxY + mapMargin);
+            
+            std::cout << "🗺️  场景边界已根据建筑物地图更新: "
+                      << "X[" << g_config.minX << ", " << g_config.maxX << "] "
+                      << "Y[" << g_config.minY << ", " << g_config.maxY << "]"
+                      << " (地图尺寸: " << (g_config.maxX - g_config.minX) << " × " 
+                      << (g_config.maxY - g_config.minY) << " m)" << std::endl;
+        }
     }
 
     // 创建恶意干扰节点 (Phase 4) - 移至建筑加载后以便避障
-    CreateInterferenceNodes(theChannel, ipv4);
+    CreateInterferenceNodes(theChannel);
+
+    if (hasBuildings) {
+        BuildingsHelper::Install(NodeContainer::GetGlobal());
+    }
     
     // 设置路由协议 (OLSR)
-    Ipv4GlobalRoutingHelper::PopulateRoutingTables();
+    // Ipv4GlobalRoutingHelper::PopulateRoutingTables();
     
     // 设置业务流量
     SetupMixedTraffic();
     
     // 安装FlowMonitor
-    g_flowMonitor = g_flowHelper.InstallAll();
+    // g_flowMonitor = g_flowHelper.InstallAll();
+    g_flowMonitor = g_flowHelper.Install(g_uavNodes);
     
     // 初始化资源分配状态
     g_state.adjacencyMatrix.resize(g_config.numUAVs, 
@@ -1262,11 +1437,12 @@ int main(int argc, char *argv[])
     // 初次手动更新拓扑以保证 0.0 秒时的拓扑连通
     UpdateTopology();
     
-    // 调度资源分配和监控
-    Simulator::Schedule(Seconds(0.2), &PerformResourceReallocation);
-    Simulator::Schedule(Seconds(0.2), &MonitorQoSPerformance);
-    Simulator::Schedule(Seconds(0.0), &LogTopologyChange);
-    Simulator::Schedule(Seconds(0.0), &LogPositions); // 启动位置记录
+    // 调度资源分配和监控 (Align start time with QoS monitoring)
+    Simulator::Schedule(Seconds(0.1), &PerformResourceReallocation);
+    // 初始启动 QoS 监控 (需与 LogPositions 同步)
+    Simulator::Schedule(Seconds(0.1), &MonitorQoSPerformance);
+    Simulator::Schedule(Seconds(0.1), &LogTopologyChange);
+    Simulator::Schedule(Seconds(0.1), &LogPositions); // 启动位置记录
     
     // 设置包收发记录 (性能瓶颈: 每一包都写磁盘，严重拖慢仿真)
     // 如需调试丢包细节，请取消注释
@@ -1299,6 +1475,15 @@ int main(int argc, char *argv[])
     
     for (auto& [flowId, flowStats] : stats) {
         if (flowStats.txPackets > 0) {
+            // ═══ 新增：先获取 srcId/dstId，过滤非 UAV 流量 ═══
+            Ipv4FlowClassifier::FiveTuple tuple = classifier->FindFlow(flowId);
+            uint32_t srcId = (tuple.sourceAddress.Get() & 0xFF) - 1;
+            uint32_t dstId = (tuple.destinationAddress.Get() & 0xFF) - 1;
+            
+            // 跳过干扰节点产生的流量（它们的 IP 不在 UAV 范围内）
+            if (srcId >= g_uavNodes.GetN() || dstId >= g_uavNodes.GetN()) continue;
+            // ═══ 新增结束 ═══
+            
             double pdr = (double)flowStats.rxPackets / flowStats.txPackets;
             double delay = flowStats.rxPackets > 0 ? flowStats.delaySum.GetSeconds() / flowStats.rxPackets : 0.0;
             double throughput = flowStats.rxBytes * 8.0 / g_config.duration;
@@ -1308,13 +1493,11 @@ int main(int argc, char *argv[])
             totalThroughput += throughput;
             flowCount++;
             
-            Ipv4FlowClassifier::FiveTuple tuple = classifier->FindFlow(flowId);
-            uint32_t srcId = (tuple.sourceAddress.Get() & 0xFF) - 1;
-            uint32_t dstId = (tuple.destinationAddress.Get() & 0xFF) - 1;
+            // tuple/srcId/dstId 已在上面获取，这里直接使用（删掉重复获取）
             double lossRate = (flowStats.txPackets - flowStats.rxPackets) * 100.0 / flowStats.txPackets;
             flowStatsLog << flowId << "," << srcId << "," << dstId << "," 
-                         << flowStats.txPackets << "," << flowStats.rxPackets << "," 
-                         << lossRate << "%\n";
+                        << flowStats.txPackets << "," << flowStats.rxPackets << "," 
+                        << lossRate << "%\n";
         }
     }
     flowStatsLog.close();
@@ -1345,4 +1528,3 @@ int main(int argc, char *argv[])
     
     return 0;
 }
-

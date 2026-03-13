@@ -371,7 +371,7 @@ class AdvancedDroneSwarm:
 
         # [F3] 动态航向状态 (不再固定)
         self.current_heading = init_heading
-        self.heading_rate_limit = math.radians(45)  # 最大 45°/s 转弯
+        self.heading_rate_limit = math.radians(20)  # 最大 45°/s 转弯
 
         # 编队原始偏移 (局部坐标, Y=前方, X=侧方)
         self.base_offsets = self._gen_offsets()
@@ -386,6 +386,8 @@ class AdvancedDroneSwarm:
             self.waypoints = plan_with_adaptive_margin(
                 self.buildings, start_pos, target_pos,
                 resolution=5.0, dev_weight=0.3)
+            if len(self.waypoints) > 2:
+                self.waypoints = self._simplify_waypoints(self.waypoints)
         else:
             self.waypoints = [self.start_pos.copy(), self.target_pos.copy()]
         self.wp_idx = 0
@@ -413,6 +415,39 @@ class AdvancedDroneSwarm:
         # 编队缩放
         self.form_scale = 1.0
         self.form_scale_target = 1.0
+
+
+    def _simplify_waypoints(self, path, angle_threshold=15.0):
+        """
+        合并近似共线的航路点，减少不必要的转弯
+        只在转弯角度超过阈值时才保留航路点
+        """
+        if len(path) <= 2:
+            return path
+        
+        simplified = [path[0]]
+        thresh_rad = math.radians(angle_threshold)
+        
+        for i in range(1, len(path) - 1):
+            v1 = path[i] - path[i-1]
+            v2 = path[i+1] - path[i]
+            
+            n1 = np.linalg.norm(v1[:2])
+            n2 = np.linalg.norm(v2[:2])
+            
+            if n1 < 0.01 or n2 < 0.01:
+                continue
+                
+            cos_angle = np.dot(v1[:2], v2[:2]) / (n1 * n2)
+            cos_angle = np.clip(cos_angle, -1, 1)
+            angle = math.acos(cos_angle)
+            
+            if angle > thresh_rad:
+                simplified.append(path[i])
+        
+        simplified.append(path[-1])
+        print(f"   📐 路径简化: {len(path)} → {len(simplified)} 航路点")
+        return simplified
 
     # ────────────────────────────────────────────────
     #  [F3] 动态编队旋转
@@ -483,7 +518,7 @@ class AdvancedDroneSwarm:
         g = self.formation_gap
         if self.formation_type == "line":
             for i in range(self.num_drones):
-                off[i] = [g * (i - self.num_drones // 2), 0, 0]
+                off[i] = [0, -g * i, 0]
         elif self.formation_type == "v_formation":
             for i in range(self.num_drones):
                 if i == 0:
@@ -722,13 +757,21 @@ class AdvancedDroneSwarm:
     def _leader_speed(self):
         lags = [np.linalg.norm(
             self.pos[i] - (self.leader_pos +
-                           self.current_offsets[i] * self.form_scale))
+                        self.current_offsets[i] * self.form_scale))
             for i in range(self.num_drones)]
-        ml = max(lags)
-        if ml < 10:      f = 1.0
-        elif ml < 50:    f = 1.0 - 0.7 * (ml - 10) / 40
-        else:            f = 0.2
-        return self.leader_base_spd * f, ml
+        
+        # 用 P75 分位数代替 max（容忍 25% 的掉队者）
+        sorted_lags = sorted(lags)
+        p75_idx = int(self.num_drones * 0.75)
+        representative_lag = sorted_lags[min(p75_idx, len(sorted_lags)-1)]
+        
+        ml = representative_lag  # 代表性掉队距离
+        
+        if ml < 15:      f = 1.0
+        elif ml < 40:    f = 1.0 - 0.5 * (ml - 15) / 25  # 更温和的减速
+        else:            f = 0.5  # 最低 50%（而非 20%）
+        
+        return self.leader_base_spd * f, max(lags)  # 返回最大值用于日志
 
     # ────────────────────────────────────────────────
     #  停滞检测 + 逃逸
@@ -868,7 +911,13 @@ class AdvancedDroneSwarm:
                 break
 
             # ━━ 2. [F3] 更新编队朝向 → V尖始终对准下个航路点 ━━
-            target_heading = math.atan2(to_wp[1], to_wp[0])
+            leader_speed = np.linalg.norm(self.leader_vel[:2])
+            if leader_speed > 1.0:
+                # 用实际飞行方向，自然平滑
+                target_heading = math.atan2(self.leader_vel[1], self.leader_vel[0])
+            else:
+                # 速度太慢时保持当前朝向，避免抖动
+                target_heading = self.current_heading
             self._update_heading(target_heading)
 
             # 当前前进方向 (编队朝向对应的单位向量)
@@ -918,6 +967,13 @@ class AdvancedDroneSwarm:
                 if fn > 10:
                     ff = ff / fn * 10
 
+                if ed > 30:  # 严重掉队
+                    # 给予额外的追赶力，方向直指理想位置
+                    chase_force = err / ed * min(ed * 0.3, 15.0)  # 最大 15N 追赶力
+                    ff += chase_force
+                    # 追赶时降低避障权重（允许走更激进的路线）
+                    # 后面的 aw 会自动处理
+
                 # ── B: 避障力 ──
                 af, md = self._avoid_force(p, v)
                 an = np.linalg.norm(af)
@@ -962,9 +1018,17 @@ class AdvancedDroneSwarm:
                 # ── G: 速度积分 + 方向性阻尼 ──
                 v += total * self.dt
                 # 用动态朝向做阻尼分解
-                fwd_comp = np.dot(v, fwd_dir) * fwd_dir
-                lat_comp = v - fwd_comp
-                v = fwd_comp * 0.985 + lat_comp * 0.93
+                fwd_comp = np.dot(v[:2], fwd_dir[:2])  # 只取 XY 前进分量
+                fwd_vec = fwd_comp * fwd_dir[:2]
+                lat_vec = v[:2] - fwd_vec
+
+                # XY 平面阻尼
+                v_xy = fwd_vec * 0.985 + lat_vec * 0.93
+
+                # Z 轴单独轻阻尼（保持垂直机动能力）
+                v_z = v[2] * 0.97  # 只衰减 3%，而非 7%
+
+                v = np.array([v_xy[0], v_xy[1], v_z])
 
                 vn = np.linalg.norm(v)
                 if vn > self.max_speed:

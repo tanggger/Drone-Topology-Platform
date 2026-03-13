@@ -1,1 +1,0 @@
-{"status": "FAILED", "error": "Command '['./ns3', 'run', 'uav_resource_allocation --formation=custom --difficulty=Hard --strategy=dynamic --outputDir=output/run_344b00d6']' returned non-zero exit status 250."}

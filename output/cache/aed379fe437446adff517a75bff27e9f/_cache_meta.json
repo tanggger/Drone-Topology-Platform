@@ -1,0 +1,87 @@
+{
+  "config_hash": "aed379fe437446adff517a75bff27e9f",
+  "params": {
+    "num_drones": 15,
+    "formation": "v_formation",
+    "start": "0,0,30",
+    "target": "500,500,30",
+    "difficulty": "Easy",
+    "strategy": "dynamic",
+    "buildings": [
+      {
+        "xMin": 180,
+        "xMax": 230,
+        "yMin": 150,
+        "yMax": 200,
+        "zMin": 0,
+        "zMax": 80
+      },
+      {
+        "xMin": 300,
+        "xMax": 360,
+        "yMin": 200,
+        "yMax": 240,
+        "zMin": 0,
+        "zMax": 100
+      },
+      {
+        "xMin": 400,
+        "xMax": 445,
+        "yMin": 120,
+        "yMax": 175,
+        "zMin": 0,
+        "zMax": 70
+      },
+      {
+        "xMin": 250,
+        "xMax": 305,
+        "yMin": 350,
+        "yMax": 395,
+        "zMin": 0,
+        "zMax": 90
+      },
+      {
+        "xMin": 420,
+        "xMax": 470,
+        "yMin": 320,
+        "yMax": 370,
+        "zMin": 0,
+        "zMax": 110
+      },
+      {
+        "xMin": 150,
+        "xMax": 190,
+        "yMin": 400,
+        "yMax": 460,
+        "zMin": 0,
+        "zMax": 75
+      },
+      {
+        "xMin": 350,
+        "xMax": 415,
+        "yMin": 450,
+        "yMax": 485,
+        "zMin": 0,
+        "zMax": 85
+      },
+      {
+        "xMin": 500,
+        "xMax": 545,
+        "yMin": 250,
+        "yMax": 300,
+        "zMin": 0,
+        "zMax": 95
+      },
+      {
+        "xMin": 100,
+        "xMax": 150,
+        "yMin": 280,
+        "yMax": 320,
+        "zMin": 0,
+        "zMax": 60
+      }
+    ],
+    "map_name": null
+  },
+  "source_task_id": "4e2e3a60"
+}
