@@ -66,7 +66,8 @@ class GridPathPlanner:
             ys += [b['ymin'], b['ymax']]
             max_building_h = max(max_building_h, b.get('zmax', 0))
             
-        pad = 150.0
+        # 减少网格边界留白，防止路径过度向外绕行 (150 -> 40)
+        pad = 40.0
         self.x0 = min(xs) - pad
         self.x1 = max(xs) + pad
         self.y0 = min(ys) - pad

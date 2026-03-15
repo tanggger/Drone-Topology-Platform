@@ -224,9 +224,19 @@ bool LoadFormationTrajectory(const std::string& filename)
     // Fix: 不能无限扩充，必须限制在用户指定的地图边界内（如果有）
     // 或者仅仅扩充一个很小的值，避免飞出去太远
     double margin = 10.0;
-    g_config.minX -= margin;
+    // g_config.minX -= margin; // 移除向负方向的盲目扩充
+    // g_config.maxX += margin;
+    // g_config.minY -= margin;
+    // g_config.maxY += margin;
+    // 改为更保守的扩充，且尽量保持在 0 以上 (如果原始轨迹就在 0 以上)
+    if (g_config.minX > 0) g_config.minX = std::max(0.0, g_config.minX - margin);
+    else g_config.minX -= margin; // 如果本来就是负的，那说明确实需要飞到负区域
+    
     g_config.maxX += margin;
-    g_config.minY -= margin;
+    
+    if (g_config.minY > 0) g_config.minY = std::max(0.0, g_config.minY - margin);
+    else g_config.minY -= margin;
+
     g_config.maxY += margin;
     
     std::cout << "场景边界已更新: X[" << g_config.minX << ", " << g_config.maxX 
@@ -326,7 +336,9 @@ void LogPositions() {
         Ptr<MobilityModel> mob = g_uavNodes.Get(i)->GetObject<MobilityModel>();
         if (mob) {
             Vector pos = mob->GetPosition();
-            g_posLog << currentTime << "," << i << "," << pos.x << "," << pos.y << "," << pos.z << ",0\n";
+            Vector vel = mob->GetVelocity();
+            double speed = std::sqrt(vel.x * vel.x + vel.y * vel.y + vel.z * vel.z);
+            g_posLog << currentTime << "," << i << "," << pos.x << "," << pos.y << "," << pos.z << ",0," << speed << "\n";
         }
     }
     // 记录黑飞节点 (node_type=1，nodeId 从 1000 起步，前端据此渲染红色敌机)
@@ -334,7 +346,11 @@ void LogPositions() {
         Ptr<MobilityModel> mob = g_interferenceNodes.Get(i)->GetObject<MobilityModel>();
         if (mob) {
             Vector pos = mob->GetPosition();
-            g_posLog << currentTime << "," << (1000 + i) << "," << pos.x << "," << pos.y << "," << pos.z << ",1\n";
+            Vector vel = mob->GetVelocity(); 
+            double speed = std::sqrt(vel.x * vel.x + vel.y * vel.y + vel.z * vel.z);
+            
+            // 在末尾通过逗号追加 speed
+            g_posLog << currentTime << "," << (1000 + i) << "," << pos.x << "," << pos.y << "," << pos.z << ",1," << speed << "\n";
         }
     }
     // Record positions every 0.1s to allow smooth animation
@@ -948,9 +964,14 @@ void CreateInterferenceNodes(Ptr<YansWifiChannel> channel)
         int initRetries = 20;
         
         while (initRetries-- > 0) {
-            // 使用动态计算的场景边界，而非固定的 areaSize
-            curX = rng->GetValue(g_config.minX + margin, g_config.maxX - margin);
-            curY = rng->GetValue(g_config.minY + margin, g_config.maxY - margin);
+            // 使用动态计算的场景边界，并强制限制在非负区域 (0,0) 以上，防止生成到负半轴
+            double safeMinX = std::max(0.0, g_config.minX + margin);
+            double safeMinY = std::max(0.0, g_config.minY + margin);
+            double safeMaxX = std::max(safeMinX + 1.0, g_config.maxX - margin); // 确保 max > min
+            double safeMaxY = std::max(safeMinY + 1.0, g_config.maxY - margin);
+
+            curX = rng->GetValue(safeMinX, safeMaxX);
+            curY = rng->GetValue(safeMinY, safeMaxY);
             curZ = rng->GetValue(baseZ - 10.0, baseZ + 10.0);
             
             bool inside = false;
@@ -1199,7 +1220,7 @@ int main(int argc, char *argv[])
     g_transLog.open(g_config.outputDir + "/rtk-node-transmissions.csv");
     
     // 写入CSV表头
-    g_posLog << "time,nodeId,x,y,z,node_type\n";
+    g_posLog << "time,nodeId,x,y,z,node_type,speed\n";
     g_transLog << "time,nodeId,eventType\n";
     g_resourceDetailedLog << "time,node_id,channel,tx_power,data_rate,neighbors,interference\n";
     g_topologyDetailedLog << "time,num_nodes,num_links,avg_degree,network_density\n";

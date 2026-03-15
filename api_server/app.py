@@ -421,6 +421,45 @@ def upload_osm():
 def health_check():
     return jsonify({"status": "OK", "message": "Wing-Net Omni Backend Server is running."})
 
+@app.route('/api/maps', methods=['GET'])
+def list_maps():
+    """
+    列出所有可用的已导入地图
+    返回格式:
+    {
+        "status": "SUCCESS",
+        "maps": ["map_name1", "map_name2", ...]
+    }
+    """
+    static_dir = os.path.join(NS3_DIR, "api_server", "static")
+    data_map_dir = os.path.join(NS3_DIR, "data_map")
+    
+    available_maps = []
+    
+    try:
+        # 扫描 static 目录下所有的 *_buildings.json 文件
+        if os.path.exists(static_dir):
+            for filename in os.listdir(static_dir):
+                if filename.endswith("_buildings.json"):
+                    # 提取 map_name (去掉后缀 _buildings.json)
+                    map_name = filename[:-15] 
+                    
+                    # 检查对应的后端仿真地图文件是否存在 (data_map/city_{map_name}.txt)
+                    txt_path = os.path.join(data_map_dir, f"city_{map_name}.txt")
+                    
+                    if os.path.exists(txt_path):
+                        available_maps.append(map_name)
+                        
+        return jsonify({
+            "status": "SUCCESS",
+            "maps": sorted(available_maps)
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "ERROR",
+            "message": f"Failed to list maps: {str(e)}"
+        })
+
 if __name__ == '__main__':
     # 开发环境下运行于 5000 端口，全网段可访问（0.0.0.0）
     app.run(host='0.0.0.0', port=5000, debug=False)

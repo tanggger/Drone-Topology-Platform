@@ -1,20 +1,20 @@
 {
   "simulation_info": {
-    "data_directory": "output/run_50e7ce8e",
-    "analysis_date": "2026-03-14 00:11:59"
+    "data_directory": "output/run_80977622",
+    "analysis_date": "2026-03-15 18:06:29"
   },
   "qos_performance": {
-    "avg_pdr": 0.444749712158167,
-    "min_pdr": 0.10199724423503326,
-    "max_pdr": 0.7010158164079822,
-    "std_pdr": 0.1778319175269379,
-    "avg_delay_ms": 308.8718863037694,
-    "min_delay_ms": 136.53878161862525,
-    "max_delay_ms": 620.0560822394679,
-    "std_delay_ms": 127.19241152365844,
-    "avg_throughput_mbps": 0.06007456496674059,
-    "total_throughput_mbps": 0.9011184745011088,
-    "std_throughput_mbps": 0.033465935616774495
+    "avg_pdr": 0.3419828115668884,
+    "min_pdr": 0.05272788569844789,
+    "max_pdr": 0.7327100476718404,
+    "std_pdr": 0.21593809531766658,
+    "avg_delay_ms": 267.10417311012566,
+    "min_delay_ms": 52.48608358093126,
+    "max_delay_ms": 488.702535232816,
+    "std_delay_ms": 117.11655456097908,
+    "avg_throughput_mbps": 0.051671627494456765,
+    "total_throughput_mbps": 0.7750744124168515,
+    "std_throughput_mbps": 0.040225733417929205
   },
   "resource_allocation": {
     "channel_distribution": {
