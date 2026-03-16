@@ -50,6 +50,27 @@ def run_simulation_task(task_id, config):
         buildings = config.get("buildings", [])
         map_name = config.get("map_name", None)
 
+        # Custom 参数提取
+        custom_params = {}
+        if difficulty == "Custom":
+            # 提取所有可能自定义的参数，设定默认值与 Easy 模式一致或自行定义
+            custom_params = {
+                "pathLossExp": float(config.get("pathLossExp", 2.0)),
+                "rxSens": float(config.get("rxSens", -90.0)),
+                "txPower": float(config.get("txPower", 23.0)),
+                "nakagamiM": float(config.get("nakagamiM", 0.0)),
+                "macRetries": int(config.get("macRetries", 7)),
+                "noiseFigure": float(config.get("noiseFigure", 7.0)),
+                "rtkNoise": float(config.get("rtkNoise", 0.01)),
+                "rtkDriftMag": float(config.get("rtkDriftMag", 0.0)),
+                "rtkDriftInt": float(config.get("rtkDriftInt", 0.0)),
+                "rtkDriftDur": float(config.get("rtkDriftDur", 0.0)),
+                "trafficLoad": float(config.get("trafficLoad", 0.2)),
+                "numInterfere": int(config.get("numInterfere", 0)),
+                "interfereRate": float(config.get("interfereRate", 0.5)),
+                "interfereDuty": float(config.get("interfereDuty", 0.1)),
+            }
+
         # ------------------------------------------------------------------
         # [Cache] 1. 计算配置哈希指纹
         # ------------------------------------------------------------------
@@ -61,7 +82,8 @@ def run_simulation_task(task_id, config):
             "difficulty": difficulty,
             "strategy": strategy,
             "buildings": buildings,
-            "map_name": map_name
+            "map_name": map_name,
+            "custom_params": custom_params  # 将 Custom 参数加入哈希计算
         }
         param_str = json.dumps(hash_params, sort_keys=True)
         config_hash = hashlib.md5(param_str.encode('utf-8')).hexdigest()
@@ -133,9 +155,28 @@ def run_simulation_task(task_id, config):
         shutil_map_cmd = ["cp", map_file, os.path.join(NS3_DIR, "data_map/custom_city.txt")]
         subprocess.run(shutil_map_cmd, cwd=NS3_DIR, check=True)
 
+        ns3_args = f"uav_resource_allocation --formation=custom --difficulty={difficulty} --strategy={strategy} --outputDir={out_dir_rel}"
+        
+        if difficulty == "Custom":
+            # 只有 Custom 模式才追加详细参数
+            ns3_args += (f" --pathLossExp={custom_params['pathLossExp']}"
+                         f" --rxSens={custom_params['rxSens']}"
+                         f" --txPower={custom_params['txPower']}"
+                         f" --nakagamiM={custom_params['nakagamiM']}"
+                         f" --macRetries={custom_params['macRetries']}"
+                         f" --noiseFigure={custom_params['noiseFigure']}"
+                         f" --rtkNoise={custom_params['rtkNoise']}"
+                         f" --rtkDriftMag={custom_params['rtkDriftMag']}"
+                         f" --rtkDriftInt={custom_params['rtkDriftInt']}"
+                         f" --rtkDriftDur={custom_params['rtkDriftDur']}"
+                         f" --trafficLoad={custom_params['trafficLoad']}"
+                         f" --numInterfere={custom_params['numInterfere']}"
+                         f" --interfereRate={custom_params['interfereRate']}"
+                         f" --interfereDuty={custom_params['interfereDuty']}")
+
         ns3_cmd = [
             "./ns3", "run",
-            f"uav_resource_allocation --formation=custom --difficulty={difficulty} --strategy={strategy} --outputDir={out_dir_rel}"
+            ns3_args
         ]
         shutil_cmd = ["cp", trace_file, os.path.join(NS3_DIR, "data_rtk/mobility_trace_custom.txt")]
         subprocess.run(shutil_cmd, cwd=NS3_DIR, check=True)

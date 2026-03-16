@@ -183,8 +183,15 @@ class UAVResourceAllocationAnalyzer:
         results['std_rate'] = self.resource_detailed['data_rate'].std()
         
         # 干扰统计
-        results['avg_interference'] = self.resource_detailed['interference'].mean()
-        results['max_interference'] = self.resource_detailed['interference'].max()
+        if 'interference_dBm' in self.resource_detailed.columns:
+             results['avg_interference'] = self.resource_detailed['interference_dBm'].mean()
+             results['max_interference'] = self.resource_detailed['interference_dBm'].max()
+        elif 'interference' in self.resource_detailed.columns:
+             results['avg_interference'] = self.resource_detailed['interference'].mean()
+             results['max_interference'] = self.resource_detailed['interference'].max()
+        else:
+             results['avg_interference'] = 0
+             results['max_interference'] = 0
         
         # 输出结果
         print(f"\n  信道使用分布: {results['channel_distribution']}")
@@ -352,11 +359,17 @@ class UAVResourceAllocationAnalyzer:
         
         # 4. 干扰水平随时间变化
         ax = axes[1, 1]
-        time_grouped = self.resource_detailed.groupby('time')['interference'].mean()
-        ax.plot(time_grouped.index, time_grouped.values, color='purple', linewidth=2)
-        ax.fill_between(time_grouped.index, time_grouped.values, alpha=0.3, color='purple')
+        interf_col = 'interference_dBm' if 'interference_dBm' in self.resource_detailed.columns else 'interference'
+        
+        if interf_col in self.resource_detailed.columns: 
+             time_grouped = self.resource_detailed.groupby('time')[interf_col].mean()
+             ax.plot(time_grouped.index, time_grouped.values, color='purple', linewidth=2)
+             ax.fill_between(time_grouped.index, time_grouped.values, alpha=0.3, color='purple')
+             ax.set_ylabel(f'平均干扰水平 ({interf_col})')
+        else:
+             ax.text(0.5, 0.5, '无干扰数据', ha='center', va='center')
+
         ax.set_xlabel('时间 (秒)')
-        ax.set_ylabel('平均干扰水平')
         ax.set_title('网络平均干扰水平演化')
         ax.grid(True, alpha=0.3)
         

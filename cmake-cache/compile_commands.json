@@ -9547,15 +9547,15 @@
 },
 {
   "directory": "/home/tzx/ns-3.43/cmake-cache",
-  "command": "/usr/bin/g++ -DHAVE_BOOST -DHAVE_BOOST_UNITS -DHAVE_LIBXML2 -DHAVE_PACKET_H -DHAVE_SQLITE3 -DNS3_BUILD_PROFILE_OPTIMIZED -DPROJECT_SOURCE_PATH=\\\"/home/tzx/ns-3.43\\\" -DRAW_SOCK_CREATOR=\\\"/home/tzx/ns-3.43/build/src/fd-net-device/ns3.43-raw-sock-creator-optimized\\\" -DTAP_CREATOR=\\\"/home/tzx/ns-3.43/build/src/tap-bridge/ns3.43-tap-creator-optimized\\\" -DTAP_DEV_CREATOR=\\\"/home/tzx/ns-3.43/build/src/fd-net-device/ns3.43-tap-device-creator-optimized\\\" -D__LINUX__ -I/home/tzx/ns-3.43/build/include -I/usr -I/usr/include/freetype2 -I/usr/include/glib-2.0 -I/usr/lib/x86_64-linux-gnu/glib-2.0/include -I/usr/include/gdk-pixbuf-2.0 -I/usr/include/gtk-3.0 -I/usr/include/cairo -I/usr/include/pango-1.0 -I/usr/include/harfbuzz -I/usr/include/atk-1.0 -I/usr/include/libxml2 -O3 -DNDEBUG -std=c++20 -fPIE   -fno-semantic-interposition -fdiagnostics-color=always -Wall -Wpedantic -march=native -mtune=native -o scratch/CMakeFiles/scratch_uav_demo_four_strategies.dir/uav_demo_four_strategies.cc.o -c /home/tzx/ns-3.43/scratch/uav_demo_four_strategies.cc",
-  "file": "/home/tzx/ns-3.43/scratch/uav_demo_four_strategies.cc",
-  "output": "scratch/CMakeFiles/scratch_uav_demo_four_strategies.dir/uav_demo_four_strategies.cc.o"
-},
-{
-  "directory": "/home/tzx/ns-3.43/cmake-cache",
   "command": "/usr/bin/g++ -DHAVE_BOOST -DHAVE_BOOST_UNITS -DHAVE_LIBXML2 -DHAVE_PACKET_H -DHAVE_SQLITE3 -DNS3_BUILD_PROFILE_OPTIMIZED -DPROJECT_SOURCE_PATH=\\\"/home/tzx/ns-3.43\\\" -DRAW_SOCK_CREATOR=\\\"/home/tzx/ns-3.43/build/src/fd-net-device/ns3.43-raw-sock-creator-optimized\\\" -DTAP_CREATOR=\\\"/home/tzx/ns-3.43/build/src/tap-bridge/ns3.43-tap-creator-optimized\\\" -DTAP_DEV_CREATOR=\\\"/home/tzx/ns-3.43/build/src/fd-net-device/ns3.43-tap-device-creator-optimized\\\" -D__LINUX__ -I/home/tzx/ns-3.43/build/include -I/usr -I/usr/include/freetype2 -I/usr/include/glib-2.0 -I/usr/lib/x86_64-linux-gnu/glib-2.0/include -I/usr/include/gdk-pixbuf-2.0 -I/usr/include/gtk-3.0 -I/usr/include/cairo -I/usr/include/pango-1.0 -I/usr/include/harfbuzz -I/usr/include/atk-1.0 -I/usr/include/libxml2 -O3 -DNDEBUG -std=c++20 -fPIE   -fno-semantic-interposition -fdiagnostics-color=always -Wall -Wpedantic -march=native -mtune=native -o scratch/CMakeFiles/scratch_uav_resource_allocation.dir/uav_resource_allocation.cc.o -c /home/tzx/ns-3.43/scratch/uav_resource_allocation.cc",
   "file": "/home/tzx/ns-3.43/scratch/uav_resource_allocation.cc",
   "output": "scratch/CMakeFiles/scratch_uav_resource_allocation.dir/uav_resource_allocation.cc.o"
+},
+{
+  "directory": "/home/tzx/ns-3.43/cmake-cache",
+  "command": "/usr/bin/g++ -DHAVE_BOOST -DHAVE_BOOST_UNITS -DHAVE_LIBXML2 -DHAVE_PACKET_H -DHAVE_SQLITE3 -DNS3_BUILD_PROFILE_OPTIMIZED -DPROJECT_SOURCE_PATH=\\\"/home/tzx/ns-3.43\\\" -DRAW_SOCK_CREATOR=\\\"/home/tzx/ns-3.43/build/src/fd-net-device/ns3.43-raw-sock-creator-optimized\\\" -DTAP_CREATOR=\\\"/home/tzx/ns-3.43/build/src/tap-bridge/ns3.43-tap-creator-optimized\\\" -DTAP_DEV_CREATOR=\\\"/home/tzx/ns-3.43/build/src/fd-net-device/ns3.43-tap-device-creator-optimized\\\" -D__LINUX__ -I/home/tzx/ns-3.43/build/include -I/usr -I/usr/include/freetype2 -I/usr/include/glib-2.0 -I/usr/lib/x86_64-linux-gnu/glib-2.0/include -I/usr/include/gdk-pixbuf-2.0 -I/usr/include/gtk-3.0 -I/usr/include/cairo -I/usr/include/pango-1.0 -I/usr/include/harfbuzz -I/usr/include/atk-1.0 -I/usr/include/libxml2 -O3 -DNDEBUG -std=c++20 -fPIE   -fno-semantic-interposition -fdiagnostics-color=always -Wall -Wpedantic -march=native -mtune=native -o scratch/CMakeFiles/scratch_uav_resource_allocation_old.dir/uav_resource_allocation_old.cc.o -c /home/tzx/ns-3.43/scratch/uav_resource_allocation_old.cc",
+  "file": "/home/tzx/ns-3.43/scratch/uav_resource_allocation_old.cc",
+  "output": "scratch/CMakeFiles/scratch_uav_resource_allocation_old.dir/uav_resource_allocation_old.cc.o"
 },
 {
   "directory": "/home/tzx/ns-3.43/cmake-cache",

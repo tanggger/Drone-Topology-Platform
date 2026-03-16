@@ -53,8 +53,17 @@ struct DifficultyParams {
     double rtkDriftInterval = 0.0;
     double rtkDriftDuration = 0.0;
     double rtkDriftMagnitude = 0.0;
+    // 干扰节点（已有 + 新增可配置项）
     bool enableInterference = false;
     uint32_t numInterferenceNodes = 0;
+    double interferenceRateMbps = 0.5;     // ★ 新增：每个黑飞的发射速率 (Mbps)
+    double interferenceDutyCycle = 0.1;    // ★ 新增：黑飞占空比 [0,1]
+    
+    // ★ 新增参数
+    double nakagamiM = 0.0;                // Nakagami-m 衰落系数 (0=禁用)
+    uint32_t macMaxRetries = 7;            // MAC层最大重传次数
+    double noiseFigure = 7.0;             // 接收端噪声系数 (dB)
+    double trafficLoadMbps = 0.2;         // 每节点业务总负载 (Mbps)
     std::string levelName = "Easy";
 };
 static DifficultyParams g_diffParams;
@@ -963,7 +972,7 @@ void ComputeTDMASlots() {
     // 应用层速率: 100Kbps × 2流 = 200Kbps/节点
     // 每周期数据量: 200000 × cycleDuration / 8  (字节)
     // 每周期包数: ceil(数据量 / packetSize)
-    double dataPerCycle = 200000.0 * g_tdma.cycleDuration / 8.0;
+    double dataPerCycle = g_diffParams.trafficLoadMbps * 1e6 * g_tdma.cycleDuration / 8.0;
     g_tdma.basePacketsPerSlot = (uint32_t)std::ceil(dataPerCycle / g_config.packetSize);
     g_tdma.basePacketsPerSlot = std::max(g_tdma.basePacketsPerSlot, g_tdma.minPacketsPerSlot);
     g_tdma.basePacketsPerSlot = std::min(g_tdma.basePacketsPerSlot, g_tdma.maxPacketsPerSlot);
@@ -1687,7 +1696,11 @@ void SetupMixedTraffic() {
             onoff.SetAttribute("OnTime",  StringValue("ns3::ConstantRandomVariable[Constant=1]"));
             onoff.SetAttribute("OffTime", StringValue("ns3::ConstantRandomVariable[Constant=0]"));
             // 每条流 ~100Kbps CBR
-            onoff.SetAttribute("DataRate", DataRateValue(DataRate("100kb/s")));
+            uint32_t perFlowKbps = (uint32_t)(g_diffParams.trafficLoadMbps * 1000.0 / 2.0);
+            perFlowKbps = std::max(perFlowKbps, (uint32_t)10);  // 最低 10kbps
+            std::string flowRateStr = std::to_string(perFlowKbps) + "kb/s";
+            onoff.SetAttribute("DataRate", DataRateValue(DataRate(flowRateStr)));
+
             onoff.SetAttribute("PacketSize", UintegerValue((uint32_t)g_config.packetSize));
             
             ApplicationContainer clientApp = onoff.Install(g_uavNodes.Get(i));
@@ -1970,23 +1983,22 @@ void CreateInterferenceNodes(Ptr<YansWifiChannel> channel)
     
     uint16_t port = 8888;
     for (uint32_t i = 0; i < g_interferenceNodes.GetN(); ++i) {
-        // 垃圾广播
-        std::string dataRate = "500kbps";
-        double onTime = 0.1;
-        double offTime = 0.9;
-        uint32_t pktSize = 512;
+        double rateMbps = g_diffParams.interferenceRateMbps;
+        double onTime   = std::max(0.01, std::min(0.99, g_diffParams.interferenceDutyCycle));
+        double offTime  = 1.0 - onTime;
         
-        if (g_diffParams.levelName == "Moderate") {
-            dataRate = "4Mbps";
-            onTime = 0.7;
-            offTime = 0.3;
-            pktSize = 1300;
-        } else if (g_diffParams.levelName == "Hard") {
-            dataRate = "6Mbps";
-            onTime = 0.95;  // 95%占空比疯狂发包
-            offTime = 0.05;
-            pktSize = 1472;
+        // 速率字符串
+        std::string dataRate;
+        if (rateMbps >= 1.0) {
+            dataRate = std::to_string((int)rateMbps) + "Mbps";
+        } else {
+            dataRate = std::to_string((int)(rateMbps * 1000)) + "kbps";
         }
+        
+        // 包大小随速率适配
+        uint32_t pktSize = 512;
+        if (rateMbps >= 4.0) pktSize = 1300;
+        if (rateMbps >= 6.0) pktSize = 1472;
         
         OnOffHelper onoff("ns3::UdpSocketFactory",
                          InetSocketAddress(Ipv4Address("255.255.255.255"), port));
@@ -2025,6 +2037,39 @@ int main(int argc, char *argv[])
     cmd.AddValue("difficulty","难度等级 (Easy/Moderate/Hard)", difficulty);
     cmd.AddValue("mapFile",   "自定义城市建筑物地图 (可为空)", mapFile);
     cmd.AddValue("tdmaInterval", "TDMA 重分配间隔(秒)", g_tdma.reallocationInterval);
+
+    double customPathLossExp   = 2.0;
+    double customRxSensitivity = -90.0;
+    double customTxPower       = 23.0;
+    
+    cmd.AddValue("nakagamiM",     "Nakagami-m 衰落系数 (0=禁用, 3.0=强LOS, 0.2=极度散射)",
+                 g_diffParams.nakagamiM);
+    cmd.AddValue("pathLossExp",   "路径损耗指数 (2.0=自由空间, 3.5=城市密集)",
+                 customPathLossExp);
+    cmd.AddValue("macRetries",    "MAC层最大重传次数 (0=无重传, 10=高容错)",
+                 g_diffParams.macMaxRetries);
+    cmd.AddValue("rxSens",        "接收灵敏度 dBm (-93=高灵敏, -75=低灵敏)",
+                 customRxSensitivity);
+    cmd.AddValue("noiseFigure",   "噪声系数 dB (6=理想, 20=恶劣)",
+                 g_diffParams.noiseFigure);
+    cmd.AddValue("txPower",       "发射功率 dBm",
+                 customTxPower);
+    cmd.AddValue("rtkNoise",      "RTK基础噪声标准差 (米)",
+                 g_diffParams.rtkNoiseStdDev);
+    cmd.AddValue("rtkDriftMag",   "RTK漂移幅度 (米, 0=无漂移)",
+                 g_diffParams.rtkDriftMagnitude);
+    cmd.AddValue("rtkDriftInt",   "RTK漂移周期 (秒, 0=无漂移)",
+                 g_diffParams.rtkDriftInterval);
+    cmd.AddValue("rtkDriftDur",   "RTK漂移持续时间 (秒)",
+                 g_diffParams.rtkDriftDuration);
+    cmd.AddValue("trafficLoad",   "每节点业务总负载 Mbps (0.1=轻载, 7.0=重载)",
+                 g_diffParams.trafficLoadMbps);
+    cmd.AddValue("numInterfere",  "黑飞干扰节点数量",
+                 g_diffParams.numInterferenceNodes);
+    cmd.AddValue("interfereRate", "黑飞发射速率 Mbps",
+                 g_diffParams.interferenceRateMbps);
+    cmd.AddValue("interfereDuty", "黑飞占空比 (0.0~1.0)",
+                 g_diffParams.interferenceDutyCycle);
     cmd.Parse(argc, argv);
     
     // 如果指定了编队模式，尝试加载轨迹文件
@@ -2168,7 +2213,33 @@ int main(int argc, char *argv[])
     double txPower       = 23.0;   // 23 dBm
     // Phase 4: 初始化难度参数
     g_diffParams.levelName = difficulty;
-    if (difficulty == "Moderate") {
+
+    if (difficulty == "Custom") {
+        // Custom 模式：直接使用 CLI 传入的值（不覆盖）
+        pathLossExp   = customPathLossExp;
+        g_pathLossExponent = pathLossExp;
+        rxSensitivity = customRxSensitivity;
+        g_config.rxSensitivity = rxSensitivity;
+        txPower       = customTxPower;
+        g_diffParams.enableInterference = (g_diffParams.numInterferenceNodes > 0);
+        
+        std::cout << "=== Custom 模式参数 ===" << std::endl;
+        std::cout << "  Nakagami-m:     " << g_diffParams.nakagamiM << std::endl;
+        std::cout << "  PathLossExp:    " << pathLossExp << std::endl;
+        std::cout << "  MAC重传:        " << g_diffParams.macMaxRetries << std::endl;
+        std::cout << "  RxSensitivity:  " << rxSensitivity << " dBm" << std::endl;
+        std::cout << "  NoiseFigure:    " << g_diffParams.noiseFigure << " dB" << std::endl;
+        std::cout << "  TxPower:        " << txPower << " dBm" << std::endl;
+        std::cout << "  RTK噪声σ:      " << g_diffParams.rtkNoiseStdDev << " m" << std::endl;
+        std::cout << "  RTK漂移:        " << g_diffParams.rtkDriftMagnitude << " m / " 
+                  << g_diffParams.rtkDriftInterval << " s" << std::endl;
+        std::cout << "  业务负载:       " << g_diffParams.trafficLoadMbps << " Mbps/节点" << std::endl;
+        std::cout << "  黑飞节点:       " << g_diffParams.numInterferenceNodes 
+                  << " × " << g_diffParams.interferenceRateMbps << "Mbps @ "
+                  << (g_diffParams.interferenceDutyCycle * 100) << "%" << std::endl;
+        std::cout << "========================" << std::endl;
+        
+    } else if (difficulty == "Moderate") {
         // pathLossExp   = 2.7;
         // rxSensitivity = -82.0;
         // txPower       = 23.0;
@@ -2185,6 +2256,13 @@ int main(int argc, char *argv[])
         g_diffParams.rtkDriftMagnitude = 0.5;
         g_diffParams.enableInterference = true;
         g_diffParams.numInterferenceNodes = 8;
+
+        g_diffParams.nakagamiM = 0.7;
+        g_diffParams.macMaxRetries = 1;
+        g_diffParams.noiseFigure = 15.0;
+        g_diffParams.trafficLoadMbps = 2.8;
+        g_diffParams.interferenceRateMbps = 4.0;
+        g_diffParams.interferenceDutyCycle = 0.7;
     } else if (difficulty == "Hard") {
         // pathLossExp   = 3.5;   // 对齐 benchmark Hard: 3.5, 4.2, 5 递进
         // rxSensitivity = -74.0; // 信号更难被接收
@@ -2202,7 +2280,23 @@ int main(int argc, char *argv[])
         g_diffParams.rtkDriftMagnitude = 1.0;
         g_diffParams.enableInterference = true;
         g_diffParams.numInterferenceNodes = 15;
+
+        g_diffParams.nakagamiM = 0.2;
+        g_diffParams.macMaxRetries = 0;
+        g_diffParams.noiseFigure = 20.0;
+        g_diffParams.trafficLoadMbps = 7.0;
+        g_diffParams.interferenceRateMbps = 6.0;
+        g_diffParams.interferenceDutyCycle = 0.95;
+    } else {
+        g_diffParams.nakagamiM = 0.0;           // 不加衰落
+        g_diffParams.macMaxRetries = 7;          // ns-3 默认
+        g_diffParams.noiseFigure = 7.0;          // ns-3 默认
+        g_diffParams.trafficLoadMbps = 0.2;      // 保持现有
+        g_diffParams.interferenceRateMbps = 0.5;
+        g_diffParams.interferenceDutyCycle = 0.1;
     }
+
+
     std::cout << "信道参数: PathLossExp=" << pathLossExp
               << ", RxSens=" << rxSensitivity << "dBm" << std::endl;
 
@@ -2220,6 +2314,17 @@ int main(int argc, char *argv[])
                                        "ReferenceDistance", DoubleValue(1.0),
                                        "ReferenceLoss",     DoubleValue(46.6777)); // 5GHz @ 1m
     }
+
+    if (g_diffParams.nakagamiM > 0.0) {
+        wifiChannel.AddPropagationLoss("ns3::NakagamiPropagationLossModel",
+                                        "m0", DoubleValue(g_diffParams.nakagamiM),
+                                        "m1", DoubleValue(g_diffParams.nakagamiM),
+                                        "m2", DoubleValue(g_diffParams.nakagamiM));
+        std::cout << "Nakagami-m 衰落已启用: m=" << g_diffParams.nakagamiM 
+                  << (g_diffParams.nakagamiM >= 2.0 ? " (近Rician/强LOS)" :
+                     g_diffParams.nakagamiM >= 0.8 ? " (近Rayleigh)" : " (极度散射)")
+                  << std::endl;
+    }
     
     YansWifiPhyHelper wifiPhy;
     Ptr<YansWifiChannel> theChannel = wifiChannel.Create();
@@ -2227,8 +2332,20 @@ int main(int argc, char *argv[])
     wifiPhy.Set("TxPowerStart", DoubleValue(txPower));
     wifiPhy.Set("TxPowerEnd",   DoubleValue(txPower));
     wifiPhy.Set("RxSensitivity", DoubleValue(rxSensitivity));
+    wifiPhy.Set("RxNoiseFigure", DoubleValue(g_diffParams.noiseFigure));
     
     NetDeviceContainer devices = wifi.Install(wifiPhy, wifiMac, g_uavNodes);
+
+    for (uint32_t i = 0; i < devices.GetN(); ++i) {
+        Ptr<WifiNetDevice> wifiDev = DynamicCast<WifiNetDevice>(devices.Get(i));
+        if (wifiDev) {
+            Ptr<WifiRemoteStationManager> mgr = wifiDev->GetRemoteStationManager();
+            if (mgr) {
+                mgr->SetAttribute("MaxSsrc", UintegerValue(g_diffParams.macMaxRetries));
+                mgr->SetAttribute("MaxSlrc", UintegerValue(g_diffParams.macMaxRetries));
+            }
+        }
+    }
     
     // 安装网络协议栈
     OlsrHelper olsr;
