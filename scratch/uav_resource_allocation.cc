@@ -30,6 +30,7 @@
 #include <sstream>
 #include <algorithm>
 #include <limits>
+#include <set>
 
 using namespace ns3;
 
@@ -58,6 +59,7 @@ struct DifficultyParams {
 };
 static DifficultyParams g_diffParams;
 static Ptr<UniformRandomVariable> g_randVar;
+static double g_pathLossExponent = 2.0;
 
 // 注入 RTK 位置漂移和噪声
 Vector ApplyRTKNoise(const Vector& originalPos, double time)
@@ -100,8 +102,11 @@ struct ResourceAllocationConfig {
     uint32_t numChannels = 3;             // 可用信道数量
     double txPowerMin = 10.0;             // 最小发射功率(dBm)
     double txPowerMax = 30.0;             // 最大发射功率(dBm)
-    double dataRateMin = 1.0;             // 最小数据速率(Mbps)
-    double dataRateMax = 11.0;            // 最大数据速率(Mbps)
+    // double dataRateMin = 1.0;             // 最小数据速率(Mbps)
+    // double dataRateMax = 11.0;            // 最大数据速率(Mbps)
+    double dataRateMin = 6.0;             // 最小数据速率(Mbps) — 802.11a OFDM最低档
+    double dataRateMax = 54.0;            // 最大数据速率(Mbps) — 802.11a OFDM最高档
+    double rxSensitivity = -90.0;
     
     // QoS要求
     double targetPDR = 0.85;              // 目标分组投递率 (85%)
@@ -127,6 +132,7 @@ struct ResourceAllocationConfig {
     // 输出配置
     std::string outputDir = "output/resource_allocation";
     bool enableVisualization = false;
+    bool enableTDMA = true;
 };
 
 // ==================== 资源分配状态 ====================
@@ -310,6 +316,59 @@ void SetupFormationMobility(NodeContainer& nodes)
 
 
 ResourceAllocationState g_state;
+
+struct TDMAManager {
+    bool enabled = false;
+    
+    double slotDuration  = 0.010;   // 每时隙 10ms
+    double guardTime     = 0.001;   // 保护间隔 1ms
+    double cycleDuration = 0.150;   // 帧周期（自动计算）
+    uint32_t numGroups   = 1;       // 空间复用分组数
+    double trafficStartTime = 3.0;  // 业务启动时间
+    
+    // 主时隙分配: nodeId → slotId
+    std::map<uint32_t, uint32_t> slotAssignment;
+    
+    // 发送流
+    struct FlowEntry {
+        uint32_t dstId;
+        Ptr<Socket> socket;
+    };
+    std::map<uint32_t, std::vector<FlowEntry>> nodeFlows;
+    
+    // ★ 动态重分配相关字段
+    uint32_t basePacketsPerSlot = 4;    // 基准每时隙发包数
+    uint32_t minPacketsPerSlot  = 2;    // 最低保底
+    uint32_t maxPacketsPerSlot  = 10;   // 单时隙容量上限
+    uint32_t bonusPktsPerSlot   = 2;    // 每个bonus时隙的发包数
+    
+    // per-node 主时隙发包预算（替代全局 packetsPerCycle）
+    std::map<uint32_t, uint32_t> perNodePackets;
+    
+    // bonus 时隙: nodeId → 可额外发送的 slotId 列表
+    std::map<uint32_t, std::vector<uint32_t>> bonusSlots;
+    
+    // QoS 紧迫度: nodeId → [0.0, 1.0]
+    std::map<uint32_t, double> urgency;
+    
+    // 冲突矩阵（空间复用判定用）
+    std::vector<std::vector<bool>> conflictMatrix;
+    
+    // 各时隙当前占用节点列表（用于 bonus 分配时检测冲突）
+    std::vector<std::vector<uint32_t>> slotOccupants;
+    
+    // 重分配控制
+    double reallocationInterval = 5.0;   // 重分配间隔 (秒)
+    uint32_t lastLinkCount = 0;          // 上次拓扑链路数（检测拓扑剧变）
+    
+    // 统计
+    uint32_t reallocationCount = 0;
+    uint32_t recoloringCount   = 0;
+};
+
+static TDMAManager g_tdma;
+static std::ofstream g_tdmaLog;
+
 NodeContainer g_uavNodes;
 NodeContainer g_interferenceNodes; // 黑飞节点全局容器 (CSV 中 nodeId 偏移量: +1000, node_type=1)
 std::map<uint32_t, Ptr<Application>> g_applications;
@@ -403,38 +462,181 @@ void UpdateTopology() {
     }
 }
 
+// ==================== SINR 计算工具 ====================
+
+/** dBm → 线性功率 (mW) */
+inline double dBmToMw(double dBm) {
+    return std::pow(10.0, dBm / 10.0);
+}
+
+/** 线性功率 (mW) → dBm */
+inline double mwToDbm(double mW) {
+    return 10.0 * std::log10(std::max(1e-20, mW));
+}
+
+/** 路径损耗 (dB)，与物理信道使用相同的指数 */
+double CalculatePathLoss(double dist) {
+    if (dist < 1.0) dist = 1.0;
+    return 46.68 + 10.0 * g_pathLossExponent * std::log10(dist);
+}
+
 /**
- * \brief 基于距离的链路质量估计
+ * 计算接收端 dstId 处的总干扰功率 (mW)
+ *
+ * @param dstId       接收节点
+ * @param excludeId   排除的发送节点（信号源本身不算干扰）
+ * @param channelFilter  -1 = 所有节点都干扰（物理现实：单射频同频）
+ *                       >=0 = 只计算该逻辑信道上的节点（多信道规划用）
+ */
+double CalculateInterference_mW(uint32_t dstId, uint32_t excludeId, 
+                                 int channelFilter = -1) {
+    double total_mW = 0.0;
+    
+    // ---- 计算发送方的载波感知范围 ----
+    double senderPower = g_state.powerAssignment.count(excludeId) ?
+                         g_state.powerAssignment[excludeId] : 20.0;
+    // PathLoss(csRange) = senderPower - rxSensitivity
+    // 46.68 + 10α·log10(csRange) = senderPower - rxSensitivity
+    // csRange = 10^((senderPower - 46.68 - rxSens) / (10α))
+    double csRange = std::pow(10.0, 
+        (senderPower - 46.68 - g_config.rxSensitivity) / 
+        (10.0 * g_pathLossExponent));
+    csRange = std::min(csRange, 2000.0);  // 合理上界
+    
+    // ---- 来自其他 UAV 的干扰：只计隐藏终端 ----
+    for (uint32_t k = 0; k < g_uavNodes.GetN(); ++k) {
+        if (k == excludeId || k == dstId) continue;
+        
+        if (channelFilter >= 0) {
+            auto it = g_state.channelAssignment.find(k);
+            if (it != g_state.channelAssignment.end() && 
+                (int)it->second != channelFilter) {
+                continue;
+            }
+        }
+        
+        // ★ CSMA 感知：节点 k 能否听到发送方?
+        double distToSender = CalculateDistance(
+            g_uavNodes.Get(k), g_uavNodes.Get(excludeId));
+        
+        if (distToSender <= csRange) {
+            // k 能听到发送方 → CSMA 退避 → 不构成干扰
+            continue;
+        }
+        
+        // k 是隐藏终端：无法感知发送方，可能同时发送
+        double dist = CalculateDistance(g_uavNodes.Get(k), g_uavNodes.Get(dstId));
+        double txK  = g_state.powerAssignment.count(k) ? 
+                      g_state.powerAssignment[k] : 20.0;
+        double rxK  = txK - CalculatePathLoss(dist);
+        
+        if (rxK > -100.0) {
+            total_mW += dBmToMw(rxK);
+        }
+    }
+    
+    // ---- 来自黑飞节点的干扰（同样考虑 CSMA）----
+    for (uint32_t k = 0; k < g_interferenceNodes.GetN(); ++k) {
+        double distToSender = CalculateDistance(
+            g_interferenceNodes.Get(k), g_uavNodes.Get(excludeId));
+        
+        double dist = CalculateDistance(
+            g_interferenceNodes.Get(k), g_uavNodes.Get(dstId));
+        double rxK  = 30.0 - CalculatePathLoss(dist);
+        
+        if (rxK > -100.0) {
+            if (distToSender <= csRange) {
+                // 黑飞在 CSMA 范围内：大部分时候退避，
+                // 但高占空比仍导致 ~10% 碰撞概率
+                total_mW += dBmToMw(rxK) * 0.1;
+            } else {
+                // 黑飞是隐藏终端：完全无法感知发送方
+                total_mW += dBmToMw(rxK);
+            }
+        }
+    }
+    
+    return total_mW;
+}
+
+/**
+ * 估算链路 src→dst 的 SINR (dB)
+ *
+ * @param channelFilter  -1 = 物理现实, >=0 = 假设性信道规划
+ */
+double EstimateSINR(uint32_t srcId, uint32_t dstId, int channelFilter = -1) {
+    double dist = CalculateDistance(g_uavNodes.Get(srcId), g_uavNodes.Get(dstId));
+    
+    // 信号功率
+    double txPower     = g_state.powerAssignment.count(srcId) ?
+                         g_state.powerAssignment[srcId] : 20.0;
+    double rxPower_dBm = txPower - CalculatePathLoss(dist);
+    double signal_mW   = dBmToMw(rxPower_dBm);
+    
+    // 热噪声：20MHz 带宽 @ 290K → -95 dBm
+    double noise_mW = dBmToMw(-95.0);
+    
+    // 干扰
+    double interference_mW = CalculateInterference_mW(dstId, srcId, channelFilter);
+    
+    // SINR = S / (I + N)
+    double sinr = signal_mW / (interference_mW + noise_mW);
+    return 10.0 * std::log10(std::max(1e-10, sinr));
+}
+
+/** SINR (dB) → 802.11a 最大可支持速率 (Mbps) */
+double SINRToMaxRate(double sinr_dB) {
+    // 基于 802.11a OFDM 调制解调门限（含 ~1dB 实现余量）
+    if (sinr_dB >= 25.0) return 54.0;   // 64QAM 3/4
+    if (sinr_dB >= 22.0) return 48.0;   // 64QAM 2/3
+    if (sinr_dB >= 18.0) return 36.0;   // 16QAM 3/4
+    if (sinr_dB >= 14.0) return 24.0;   // 16QAM 1/2
+    if (sinr_dB >= 11.0) return 18.0;   // QPSK 3/4
+    if (sinr_dB >=  9.0) return 12.0;   // QPSK 1/2
+    if (sinr_dB >=  8.0) return  9.0;   // BPSK 3/4
+    if (sinr_dB >=  6.0) return  6.0;   // BPSK 1/2
+    return 0.0;  // 低于最低解调门限
+}
+
+/** 速率 (Mbps) → 所需最低 SINR (dB) */
+double RateToMinSINR(double rate) {
+    if (rate >= 54.0) return 25.0;
+    if (rate >= 48.0) return 22.0;
+    if (rate >= 36.0) return 18.0;
+    if (rate >= 24.0) return 14.0;
+    if (rate >= 18.0) return 11.0;
+    if (rate >= 12.0) return  9.0;
+    if (rate >=  9.0) return  8.0;
+    return 6.0;
+}
+
+/**
+ * 基于 SINR 的链路质量估计
+ * 返回 [0, 1]，其中 0 = 无法解调，1 = 可支持最高速率
  */
 double EstimateLinkQuality(uint32_t srcId, uint32_t dstId) {
-    Ptr<Node> src = g_uavNodes.Get(srcId);
-    Ptr<Node> dst = g_uavNodes.Get(dstId);
+    double dist = CalculateDistance(g_uavNodes.Get(srcId), g_uavNodes.Get(dstId));
+    if (dist > 150.0) return 0.0;
     
-    double dist = CalculateDistance(src, dst);
-    double maxDist = 150.0;
+    double sinr = EstimateSINR(srcId, dstId);
     
-    // 简单的路径损耗模型
-    if (dist > maxDist) return 0.0;
-    
-    // 链路质量随距离递减
-    double quality = 1.0 - (dist / maxDist);
+    // SINR 6dB → quality=0 (最低速率勉强可解)
+    // SINR 25dB → quality=1 (可支持 54Mbps)
+    double quality = (sinr - 6.0) / (25.0 - 6.0);
     return std::max(0.0, std::min(1.0, quality));
 }
 
 /**
- * \brief 干扰最小化信道分配算法
- * 
- * 对每个节点、每个候选信道计算"距离加权干扰分"，
- * 选择干扰分最低的信道。自动实现负载均衡，
- * 无需图着色（图着色在密集组网中必然失败）。
+ * SINR 驱动信道分配算法
+ *
+ * 改进：用实际干扰功率 (mW) 代替距离权重评分
+ * - 距离权重无法区分"远处大功率"和"近处小功率"
+ * - 功率级别评分直接反映物理干扰强度
  */
 void DynamicChannelAllocation() {
-    NS_LOG_INFO("执行干扰最小化信道分配...");
+    NS_LOG_INFO("执行 SINR 驱动信道分配...");
     
     uint32_t n = g_uavNodes.GetN();
-    double commRange = 150.0;
-    
-    // 清空旧分配，从头计算
     g_state.channelAssignment.clear();
     
     // 按度数降序排列（核心节点优先分配）
@@ -445,31 +647,32 @@ void DynamicChannelAllocation() {
     std::sort(nodeDegrees.rbegin(), nodeDegrees.rend());
     
     for (auto& [degree, nodeId] : nodeDegrees) {
-        // 对每个信道计算干扰分
-        // 干扰分 = Σ (已分配到该信道的邻居的距离权重)
-        // 距离越近权重越大，同频邻居越多分越高
-        std::vector<double> channelScore(g_config.numChannels, 0.0);
+        // 对每个候选信道计算干扰功率 (mW)
+        std::vector<double> channelInterference(g_config.numChannels, 0.0);
         
-        // 统计每信道的全局负载（用于打破平局时的负载均衡）
+        // 统计当前各信道负载
         std::vector<uint32_t> channelLoad(g_config.numChannels, 0);
         for (auto& [nid, ch] : g_state.channelAssignment) {
             channelLoad[ch]++;
         }
         
         for (uint32_t ch = 0; ch < g_config.numChannels; ++ch) {
-            // 1. 邻居同频干扰（主要因素）
+            
+            // ---- 一跳同频干扰（主因素）----
             for (uint32_t neighborId : g_state.neighbors[nodeId]) {
                 auto it = g_state.channelAssignment.find(neighborId);
                 if (it != g_state.channelAssignment.end() && it->second == ch) {
                     double dist = CalculateDistance(
                         g_uavNodes.Get(nodeId), g_uavNodes.Get(neighborId));
-                    // 距离越近干扰越强（反比权重）
-                    double weight = std::max(0.0, 1.0 - dist / commRange);
-                    channelScore[ch] += weight * 10.0;  // 主权重 ×10
+                    double txK = g_state.powerAssignment.count(neighborId) ?
+                                 g_state.powerAssignment[neighborId] : 20.0;
+                    double rxPower = txK - CalculatePathLoss(dist);
+                    // ★ 用实际功率级别评分，而非线性距离权重
+                    channelInterference[ch] += dBmToMw(rxPower);
                 }
             }
             
-            // 2. 两跳邻居同频干扰（次要因素，防止隐藏终端）
+            // ---- 两跳隐藏终端干扰（次因素，权重 ×0.3）----
             for (uint32_t neighborId : g_state.neighbors[nodeId]) {
                 for (uint32_t twoHop : g_state.neighbors[neighborId]) {
                     if (twoHop == nodeId) continue;
@@ -477,24 +680,26 @@ void DynamicChannelAllocation() {
                     if (it != g_state.channelAssignment.end() && it->second == ch) {
                         double dist = CalculateDistance(
                             g_uavNodes.Get(nodeId), g_uavNodes.Get(twoHop));
-                        if (dist < commRange * 1.5) {
-                            double weight = std::max(0.0, 1.0 - dist / (commRange * 1.5));
-                            channelScore[ch] += weight * 2.0;  // 次权重 ×2
+                        if (dist < 225.0) {  // 1.5 × commRange
+                            double txK = g_state.powerAssignment.count(twoHop) ?
+                                         g_state.powerAssignment[twoHop] : 20.0;
+                            double rxPower = txK - CalculatePathLoss(dist);
+                            channelInterference[ch] += dBmToMw(rxPower) * 0.3;
                         }
                     }
                 }
             }
             
-            // 3. 全局负载均衡惩罚（打破平局）
-            channelScore[ch] += channelLoad[ch] * 0.1;
+            // ---- 负载均衡惩罚（统一量纲：用伪干扰功率）----
+            channelInterference[ch] += channelLoad[ch] * dBmToMw(-80.0);
         }
         
-        // 选择干扰分最低的信道
+        // 选择干扰功率最低的信道
         uint32_t bestChannel = 0;
-        double minScore = channelScore[0];
+        double minInterference = channelInterference[0];
         for (uint32_t ch = 1; ch < g_config.numChannels; ++ch) {
-            if (channelScore[ch] < minScore) {
-                minScore = channelScore[ch];
+            if (channelInterference[ch] < minInterference) {
+                minInterference = channelInterference[ch];
                 bestChannel = ch;
             }
         }
@@ -502,7 +707,7 @@ void DynamicChannelAllocation() {
         g_state.channelAssignment[nodeId] = bestChannel;
     }
     
-    // 输出分配统计
+    // 日志
     std::vector<uint32_t> finalLoad(g_config.numChannels, 0);
     for (auto& [nid, ch] : g_state.channelAssignment) finalLoad[ch]++;
     std::string loadStr;
@@ -513,46 +718,79 @@ void DynamicChannelAllocation() {
 }
 
 /**
- * \brief 动态功率控制算法
- * 
- * 根据链路距离和干扰情况调整发射功率
+ * SINR 驱动功率控制
+ *
+ * 核心思路：
+ *   1. 计算最差链路 SINR
+ *   2. 与当前速率所需 SINR 比较
+ *   3. SINR 不足 → 提升功率；SINR 过剩 → 降低功率（减少对邻居干扰）
+ *   4. QoS 闭环：PDR 低于目标时额外补偿
  */
 void DynamicPowerControl() {
-    NS_LOG_INFO("执行动态功率控制...");
+    NS_LOG_INFO("执行 SINR 驱动功率控制...");
     
     for (uint32_t i = 0; i < g_uavNodes.GetN(); ++i) {
         if (g_state.neighbors[i].empty()) {
-            // 没有邻居，使用最大功率
             g_state.powerAssignment[i] = g_config.txPowerMax;
             continue;
         }
         
-        // 计算到所有邻居的平均距离
-        double avgDist = 0.0;
+        // ---- 1. 计算当前最差链路 SINR ----
+        double worstSINR = 100.0;
         for (uint32_t neighborId : g_state.neighbors[i]) {
-            avgDist += CalculateDistance(g_uavNodes.Get(i), g_uavNodes.Get(neighborId));
+            double sinr = EstimateSINR(i, neighborId);
+            worstSINR = std::min(worstSINR, sinr);
         }
-        avgDist /= g_state.neighbors[i].size();
         
-        // 根据距离调整功率 (距离越远，功率越大)
-        double maxDist = 150.0;
-        double powerRatio = std::min(1.0, avgDist / maxDist);
-        double txPower = g_config.txPowerMin + 
-                         powerRatio * (g_config.txPowerMax - g_config.txPowerMin);
+        // ---- 2. 目标 SINR = 当前速率的最低门限 + 3dB 余量 ----
+        double currentRate = g_state.rateAssignment.count(i) ? 
+                             g_state.rateAssignment[i] : 6.0;
+        double targetSINR  = RateToMinSINR(currentRate) + 3.0;
         
-        g_state.powerAssignment[i] = txPower;
+        // ---- 3. SINR 差距 → 功率调整 ----
+        double sinrGap     = targetSINR - worstSINR;
+        double currentPower = g_state.powerAssignment.count(i) ? 
+                              g_state.powerAssignment[i] : 20.0;
+        double newPower     = currentPower;
+        
+        if (sinrGap > 0) {
+            newPower += std::min(3.0, sinrGap);
+        } else if (sinrGap < -3.0) {
+            newPower -= std::min(3.0, (-sinrGap - 3.0) * 0.5);
+        }
+        
+        // ---- 4. QoS 闭环：PDR 低于目标时额外补偿 ----
+        double currentTime = Simulator::Now().GetSeconds();
+        if (currentTime > 15.0  // ★ 路由收敛保护期
+            && g_state.nodePDR.count(i) && g_state.nodePDR[i] > 0.0
+            && g_state.nodePDR[i] < g_config.targetPDR) {
+            double pdrGap = g_config.targetPDR - g_state.nodePDR[i];
+            newPower += std::min(2.0, pdrGap * 5.0);
+        }
+        
+        // ---- 5. 密度调节：邻居过多且 SINR 有余量时降功率 ----
+        if (g_state.neighbors[i].size() > 5 && sinrGap < -3.0) {
+            newPower -= std::min(1.0, (g_state.neighbors[i].size() - 5) * 0.3);
+        }
+        
+        // 钳位到合法范围
+        newPower = std::max(g_config.txPowerMin, std::min(g_config.txPowerMax, newPower));
+        g_state.powerAssignment[i] = newPower;
     }
     
     NS_LOG_INFO("功率控制完成");
 }
 
 /**
- * \brief 自适应速率调整算法
- * 
- * 根据链路质量动态调整数据传输速率
+ * SINR 驱动速率调整
+ *
+ * 直接用 SINR (dB) 查 802.11a 调制解调表得到最大可支持速率
+ * 无需中间的 "链路质量" 抽象，避免二次映射误差
  */
 void AdaptiveRateControl() {
-    NS_LOG_INFO("执行自适应速率调整...");
+    NS_LOG_INFO("执行 SINR 驱动速率调整...");
+
+    double currentTime = Simulator::Now().GetSeconds();
     
     for (uint32_t i = 0; i < g_uavNodes.GetN(); ++i) {
         if (g_state.neighbors[i].empty()) {
@@ -560,22 +798,47 @@ void AdaptiveRateControl() {
             continue;
         }
         
-        // 计算到所有邻居的平均链路质量
-        double avgQuality = 0.0;
+        // ---- 1. 计算最差 / 最佳链路 SINR ----
+        double worstSINR = 100.0;
+        double bestSINR  = -100.0;
         for (uint32_t neighborId : g_state.neighbors[i]) {
-            avgQuality += EstimateLinkQuality(i, neighborId);
+            double sinr = EstimateSINR(i, neighborId);
+            worstSINR = std::min(worstSINR, sinr);
+            bestSINR  = std::max(bestSINR, sinr);
         }
-        avgQuality /= g_state.neighbors[i].size();
         
-        // 根据链路质量调整速率
-        double dataRate = g_config.dataRateMin + 
-                          avgQuality * (g_config.dataRateMax - g_config.dataRateMin);
+        // ---- 2. 加权 SINR（70% 看最差，30% 看最好）----
+        double effectiveSINR = 0.7 * worstSINR + 0.3 * bestSINR;
+        
+        // ---- 3. QoS 闭环惩罚 ----
+        // PDR 低于目标 → 降低 effective SINR → 选更低速率 → 提高帧成功率
+        // 前15秒路由收敛期内，不做QoS惩罚
+        if (currentTime > 15.0) {
+            if (g_state.nodePDR.count(i) && g_state.nodePDR[i] > 0.0
+                && g_state.nodePDR[i] < g_config.targetPDR) {
+                double penalty = (g_config.targetPDR - g_state.nodePDR[i]) * 20.0;
+                effectiveSINR -= std::min(10.0, penalty);
+            }
+            
+            if (g_state.nodeDelay.count(i) 
+                && g_state.nodeDelay[i] > g_config.maxEndToEndDelay) {
+                // ★ 修改：只在PDR也差时才降速率
+                if (g_state.nodePDR.count(i) && g_state.nodePDR[i] < 0.7) {
+                    effectiveSINR -= 3.0;
+                }
+            }
+        }
+        
+        // ---- 4. 直接查表得到最大可支持速率 ----
+        double dataRate = SINRToMaxRate(effectiveSINR);
+        if (dataRate < 6.0) dataRate = 6.0;  // 最低保底
         
         g_state.rateAssignment[i] = dataRate;
     }
     
     NS_LOG_INFO("速率调整完成");
 }
+
 
 // ==================== 物理层资源下发 (确保算法生效) ====================
 void ApplyResourceAssignments() {
@@ -604,18 +867,527 @@ void ApplyResourceAssignments() {
         // ✅ 保留：速率调整
         Ptr<WifiRemoteStationManager> stationManager = wifiDevice->GetRemoteStationManager();
         if (stationManager) {
-            std::string rateMode = "OfdmRate6Mbps";
             double rate = g_state.rateAssignment[i];
-            if (rate >= 54.0) rateMode = "OfdmRate54Mbps";
+            std::string rateMode;
+            if      (rate >= 54.0) rateMode = "OfdmRate54Mbps";
             else if (rate >= 48.0) rateMode = "OfdmRate48Mbps";
             else if (rate >= 36.0) rateMode = "OfdmRate36Mbps";
             else if (rate >= 24.0) rateMode = "OfdmRate24Mbps";
             else if (rate >= 18.0) rateMode = "OfdmRate18Mbps";
             else if (rate >= 12.0) rateMode = "OfdmRate12Mbps";
+            else if (rate >= 9.0)  rateMode = "OfdmRate9Mbps";
+            else                   rateMode = "OfdmRate6Mbps";
             
             stationManager->SetAttribute("DataMode", StringValue(rateMode));
         }
     }
+}
+
+/**
+ * 空间TDMA分组算法 (Spatial TDMA via Greedy Graph Coloring)
+ *
+ * 核心思想：
+ *   距离 > 2×commRange 的节点不会互相干扰，可以共享同一时隙
+ *   → 将节点分组，同组节点同时发送，不同组节点时分复用
+ *   → 分组数越少，帧越短，每节点吞吐量越高
+ *
+ * 算法：
+ *   1. 构建冲突图：距离 < conflictRange 的节点有边
+ *   2. 贪心图着色：度数大的节点优先分配颜色
+ *   3. 颜色数 = 时隙数 = 分组数
+ *
+ * 示例：15个节点紧密编队 → ~15组（退化为纯TDMA）
+ *        15个节点分散部署 → ~5组（3倍吞吐提升）
+ */
+void ComputeTDMASlots() {
+    uint32_t n = g_uavNodes.GetN();
+    double conflictRange = 300.0;  // 2 × commRange(150m)
+    
+    NS_LOG_INFO("计算 TDMA 空间复用分组 (冲突距离=" << conflictRange << "m)...");
+    
+    // ---- 1. 构建冲突邻接矩阵 ----
+    std::vector<std::vector<bool>> conflict(n, std::vector<bool>(n, false));
+    std::vector<uint32_t> conflictDegree(n, 0);
+    
+    for (uint32_t i = 0; i < n; ++i) {
+        for (uint32_t j = i + 1; j < n; ++j) {
+            double dist = CalculateDistance(g_uavNodes.Get(i), g_uavNodes.Get(j));
+            if (dist < conflictRange) {
+                conflict[i][j] = conflict[j][i] = true;
+                conflictDegree[i]++;
+                conflictDegree[j]++;
+            }
+        }
+    }
+    
+    // ---- 2. 按冲突度降序排列（高度数节点优先着色）----
+    std::vector<std::pair<uint32_t, uint32_t>> nodeOrder;  // (degree, nodeId)
+    for (uint32_t i = 0; i < n; ++i) {
+        nodeOrder.push_back({conflictDegree[i], i});
+    }
+    std::sort(nodeOrder.rbegin(), nodeOrder.rend());
+    
+    // ---- 3. 贪心图着色 ----
+    std::vector<int> color(n, -1);
+    uint32_t numColors = 0;
+    
+    for (auto& [deg, nodeId] : nodeOrder) {
+        // 收集冲突邻居已用的颜色
+        std::set<int> usedColors;
+        for (uint32_t j = 0; j < n; ++j) {
+            if (conflict[nodeId][j] && color[j] >= 0) {
+                usedColors.insert(color[j]);
+            }
+        }
+        
+        // 找最小可用颜色
+        int c = 0;
+        while (usedColors.count(c)) c++;
+        
+        color[nodeId] = c;
+        if ((uint32_t)(c + 1) > numColors) numColors = c + 1;
+    }
+    
+    // ---- 4. 至少1组 ----
+    if (numColors == 0) numColors = 1;
+    
+    // ---- 5. 存储结果 ----
+    g_tdma.numGroups = numColors;
+    g_tdma.cycleDuration = numColors * g_tdma.slotDuration;
+    
+    for (uint32_t i = 0; i < n; ++i) {
+        g_tdma.slotAssignment[i] = (uint32_t)color[i];
+    }
+    
+    // ---- 6. 计算每周期发包数 ----
+    // 应用层速率: 100Kbps × 2流 = 200Kbps/节点
+    // 每周期数据量: 200000 × cycleDuration / 8  (字节)
+    // 每周期包数: ceil(数据量 / packetSize)
+    double dataPerCycle = 200000.0 * g_tdma.cycleDuration / 8.0;
+    g_tdma.basePacketsPerSlot = (uint32_t)std::ceil(dataPerCycle / g_config.packetSize);
+    g_tdma.basePacketsPerSlot = std::max(g_tdma.basePacketsPerSlot, g_tdma.minPacketsPerSlot);
+    g_tdma.basePacketsPerSlot = std::min(g_tdma.basePacketsPerSlot, g_tdma.maxPacketsPerSlot);
+
+    // ---- 7. 输出分组结果 ----
+    std::cout << "TDMA 空间复用分组完成:" << std::endl;
+    std::cout << "  分组数(时隙数): " << numColors << std::endl;
+    std::cout << "  帧周期: " << g_tdma.cycleDuration * 1000.0 << " ms" << std::endl;
+    std::cout << "  基准发包: " << g_tdma.basePacketsPerSlot << " 包/节点/时隙" << std::endl;
+    
+    double compressionRatio = (double)n / numColors;
+    std::cout << "  空间复用增益: " << compressionRatio << "x "
+              << "(纯TDMA需 " << n << " 时隙，空间TDMA仅需 " << numColors << " 时隙)" << std::endl;
+    
+    for (uint32_t g = 0; g < numColors; ++g) {
+        std::cout << "  Slot " << g << ": [";
+        bool first = true;
+        for (uint32_t i = 0; i < n; ++i) {
+            if (g_tdma.slotAssignment[i] == g) {
+                if (!first) std::cout << ", ";
+                std::cout << "UAV" << i;
+                first = false;
+            }
+        }
+        std::cout << "]" << std::endl;
+    }
+    
+    // ---- 8. 构建冲突矩阵和时隙占用表（供动态重分配使用）----
+    g_tdma.conflictMatrix = conflict;
+    
+    g_tdma.slotOccupants.clear();
+    g_tdma.slotOccupants.resize(numColors);
+    for (uint32_t i = 0; i < n; ++i) {
+        g_tdma.slotOccupants[color[i]].push_back(i);
+    }
+    
+    // 初始化 per-node 包预算为基准值
+    for (uint32_t i = 0; i < n; ++i) {
+        g_tdma.perNodePackets[i] = g_tdma.basePacketsPerSlot;
+        g_tdma.bonusSlots[i].clear();
+        g_tdma.urgency[i] = 0.0;
+    }
+    
+    g_tdma.lastLinkCount = 0;
+    for (uint32_t i = 0; i < n; ++i) {
+        g_tdma.lastLinkCount += g_state.neighbors[i].size();
+    }
+    g_tdma.lastLinkCount /= 2;
+}
+
+// ==================== 动态 TDMA 重分配 ====================
+
+/**
+ * 计算节点 QoS 紧迫度
+ *
+ * urgency = 0.0  → QoS 完全满足，可以让出资源
+ * urgency = 1.0  → QoS 严重不达标，急需更多资源
+ *
+ * 综合考虑：PDR差距(70%), 时延超标(20%), 吞吐不足(10%)
+ */
+double ComputeQoSUrgency(uint32_t nodeId) {
+    double urgency = 0.0;
+    
+    // ---- PDR 维度 (权重 70%) ----
+    if (g_state.nodePDR.count(nodeId) && g_state.nodePDR[nodeId] > 0.0) {
+        double pdrGap = g_config.targetPDR - g_state.nodePDR[nodeId];
+        if (pdrGap > 0) {
+            // PDR 差距归一化：差 0.85 → urgency=1.0
+            urgency += std::min(1.0, pdrGap / g_config.targetPDR) * 0.70;
+        }
+    } else {
+        // 尚无 PDR 数据（刚启动），给一个中等紧迫度
+        urgency += 0.3;
+    }
+    
+    // ---- 时延维度 (权重 20%) ----
+    if (g_state.nodeDelay.count(nodeId) && g_state.nodeDelay[nodeId] > 0.0) {
+        double delayRatio = g_state.nodeDelay[nodeId] / g_config.maxEndToEndDelay;
+        if (delayRatio > 1.0) {
+            urgency += std::min(1.0, (delayRatio - 1.0)) * 0.20;
+        }
+    }
+    
+    // ---- 吞吐量维度 (权重 10%) ----
+    if (g_state.nodeThroughput.count(nodeId)) {
+        double tputRatio = g_state.nodeThroughput[nodeId] / g_config.minThroughput;
+        if (tputRatio < 1.0) {
+            urgency += (1.0 - tputRatio) * 0.10;
+        }
+    }
+    
+    return std::max(0.0, std::min(1.0, urgency));
+}
+
+/**
+ * 检查节点 nodeId 是否可以安全使用 slotId 作为 bonus 时隙
+ *
+ * 条件：该时隙内所有已有占用者都与 nodeId 不冲突（空间隔离）
+ */
+bool IsSlotCompatible(uint32_t nodeId, uint32_t slotId) {
+    uint32_t n = g_uavNodes.GetN();
+    
+    if (slotId >= g_tdma.slotOccupants.size()) return false;
+    
+    // 不能是自己的主时隙（已经在发了）
+    if (g_tdma.slotAssignment[nodeId] == slotId) return false;
+    
+    // 检查与该时隙所有占用者（主时隙 + 已分配的 bonus 节点）的冲突
+    for (uint32_t occupant : g_tdma.slotOccupants[slotId]) {
+        if (occupant >= n || nodeId >= n) continue;
+        if (g_tdma.conflictMatrix[nodeId][occupant]) {
+            return false;  // 存在空间冲突
+        }
+    }
+    
+    // 检查与已获得此 bonus 时隙的其他节点的冲突
+    for (auto& [otherId, otherBonus] : g_tdma.bonusSlots) {
+        if (otherId == nodeId) continue;
+        for (uint32_t bs : otherBonus) {
+            if (bs == slotId && nodeId < n && otherId < n) {
+                if (g_tdma.conflictMatrix[nodeId][otherId]) {
+                    return false;
+                }
+            }
+        }
+    }
+    
+    return true;
+}
+
+/**
+ * 动态 TDMA 重分配主函数
+ *
+ * 调用频率：每 reallocationInterval 秒（默认 5s）
+ *
+ * 三层调节机制：
+ *   层1: 主时隙包预算调节（快速，每次调用）
+ *        → QoS差的节点在自己的时隙内发更多包
+ *   层2: Bonus 时隙分配/回收（中速，每次调用）
+ *        → QoS严重不达标的节点借用空闲时隙
+ *   层3: 空间复用重着色（慢速，仅拓扑剧变时）
+ *        → 重新计算冲突图和分组方案
+ */
+void DynamicTDMAReallocation() {
+    if (!g_tdma.enabled) return;
+    
+    double currentTime = Simulator::Now().GetSeconds();
+    uint32_t n = g_uavNodes.GetN();
+    
+    NS_LOG_INFO("时间 " << currentTime << "s: 执行动态 TDMA 重分配 (#" 
+                << g_tdma.reallocationCount << ")");
+    g_tdma.reallocationCount++;
+    
+    // ============ 层3: 拓扑剧变检测 → 重着色 ============
+    uint32_t currentLinks = 0;
+    for (uint32_t i = 0; i < n; ++i) {
+        currentLinks += g_state.neighbors[i].size();
+    }
+    currentLinks /= 2;
+    
+    bool needRecolor = false;
+    if (g_tdma.lastLinkCount > 0) {
+        double linkChange = std::abs((double)currentLinks - (double)g_tdma.lastLinkCount) 
+                           / g_tdma.lastLinkCount;
+        if (linkChange > 0.20) {
+            needRecolor = true;
+            NS_LOG_INFO("  拓扑链路变化 " << (linkChange*100) << "% > 20%，触发重着色");
+        }
+    }
+    
+    if (needRecolor) {
+        g_tdma.recoloringCount++;
+        ComputeTDMASlots();  // 重新着色（内部会重置 perNodePackets 和 bonusSlots）
+        g_tdma.lastLinkCount = currentLinks;
+        
+        // 重着色后跳过本轮的预算调节，让新分组先稳定一个周期
+        if (g_tdmaLog.is_open()) {
+            g_tdmaLog << currentTime << ",RECOLOR,"
+                      << g_tdma.numGroups << ","
+                      << g_tdma.cycleDuration * 1000.0 << "\n";
+        }
+        
+        Simulator::Schedule(Seconds(g_tdma.reallocationInterval), 
+                           &DynamicTDMAReallocation);
+        return;
+    }
+    g_tdma.lastLinkCount = currentLinks;
+    
+    // ============ 计算全节点 QoS 紧迫度 ============
+    double totalUrgency = 0.0;
+    uint32_t urgentCount = 0;
+    uint32_t satisfiedCount = 0;
+    
+    for (uint32_t i = 0; i < n; ++i) {
+        g_tdma.urgency[i] = ComputeQoSUrgency(i);
+        totalUrgency += g_tdma.urgency[i];
+        if (g_tdma.urgency[i] > 0.3) urgentCount++;
+        if (g_tdma.urgency[i] < 0.05) satisfiedCount++;
+    }
+    
+    NS_LOG_INFO("  QoS 评估: 紧急=" << urgentCount 
+                << " 满足=" << satisfiedCount
+                << " 平均紧迫度=" << (n > 0 ? totalUrgency/n : 0));
+    
+    // ============ 层1: 主时隙包预算调节 ============
+    // 策略：总预算守恒（不增加总流量，只在节点间重新分配）
+    //   总预算 = n × basePacketsPerSlot
+    //   每节点预算 = base × (1 + urgency × boostFactor) → 然后归一化
+    
+    uint32_t totalBudget = n * g_tdma.basePacketsPerSlot;
+    
+    // 计算原始权重
+    std::vector<double> rawBudget(n);
+    double budgetSum = 0.0;
+    double boostFactor = 2.0;  // 最紧急节点可获得 3× 基准
+    
+    for (uint32_t i = 0; i < n; ++i) {
+        rawBudget[i] = 1.0 + g_tdma.urgency[i] * boostFactor;
+        budgetSum += rawBudget[i];
+    }
+    
+    // 归一化使总预算守恒
+    for (uint32_t i = 0; i < n; ++i) {
+        double normalized = rawBudget[i] / budgetSum * totalBudget;
+        uint32_t pkts = (uint32_t)std::round(normalized);
+        pkts = std::max(g_tdma.minPacketsPerSlot, 
+                        std::min(g_tdma.maxPacketsPerSlot, pkts));
+        g_tdma.perNodePackets[i] = pkts;
+    }
+    
+    // ============ 层2: Bonus 时隙分配/回收 ============
+    
+    // 2a. 回收：QoS 恢复正常的节点释放 bonus 时隙
+    for (uint32_t i = 0; i < n; ++i) {
+        if (g_tdma.urgency[i] < 0.10 && !g_tdma.bonusSlots[i].empty()) {
+            NS_LOG_INFO("  节点 " << i << " QoS 恢复，回收 " 
+                        << g_tdma.bonusSlots[i].size() << " 个 bonus 时隙");
+            g_tdma.bonusSlots[i].clear();
+        }
+    }
+    
+    // 2b. 分配：QoS 严重不达标的节点尝试获取 bonus 时隙
+    // 按紧迫度降序排列，优先保障最差的节点
+    std::vector<std::pair<double, uint32_t>> urgencyRank;
+    for (uint32_t i = 0; i < n; ++i) {
+        urgencyRank.push_back({g_tdma.urgency[i], i});
+    }
+    std::sort(urgencyRank.rbegin(), urgencyRank.rend());
+    
+    uint32_t maxBonusSlotsPerNode = 2;  // 每节点最多 2 个 bonus 时隙
+    
+    for (auto& [urg, nodeId] : urgencyRank) {
+        // 只给紧迫度 > 0.4 的节点分配 bonus
+        if (urg < 0.40) break;
+        
+        // 已有足够 bonus 时隙
+        if (g_tdma.bonusSlots[nodeId].size() >= maxBonusSlotsPerNode) continue;
+        
+        // 遍历所有时隙，寻找兼容的
+        for (uint32_t slotId = 0; slotId < g_tdma.numGroups; ++slotId) {
+            if (g_tdma.bonusSlots[nodeId].size() >= maxBonusSlotsPerNode) break;
+            
+            if (IsSlotCompatible(nodeId, slotId)) {
+                g_tdma.bonusSlots[nodeId].push_back(slotId);
+                NS_LOG_INFO("  节点 " << nodeId << " (urgency=" << urg 
+                            << ") 获得 bonus 时隙 " << slotId);
+            }
+        }
+    }
+    
+    // ============ 日志记录 ============
+    if (g_tdmaLog.is_open()) {
+        for (uint32_t i = 0; i < n; ++i) {
+            std::string bonusStr = "";
+            for (uint32_t bs : g_tdma.bonusSlots[i]) {
+                if (!bonusStr.empty()) bonusStr += ";";
+                bonusStr += std::to_string(bs);
+            }
+            if (bonusStr.empty()) bonusStr = "none";
+            
+            g_tdmaLog << currentTime << ","
+                      << i << ","
+                      << g_tdma.slotAssignment[i] << ","
+                      << g_tdma.numGroups << ","
+                      << g_tdma.perNodePackets[i] << ","
+                      << bonusStr << ","
+                      << g_tdma.urgency[i] << "\n";
+        }
+    }
+    
+    // 调度下次重分配
+    Simulator::Schedule(Seconds(g_tdma.reallocationInterval), 
+                       &DynamicTDMAReallocation);
+}
+
+/**
+ * 发送单个 TDMA 数据包
+ */
+void SendTDMAPacket(uint32_t nodeId, uint32_t flowIdx) {
+    auto it = g_tdma.nodeFlows.find(nodeId);
+    if (it == g_tdma.nodeFlows.end()) return;
+    
+    auto& flows = it->second;
+    if (flowIdx >= flows.size()) return;
+    
+    Ptr<Packet> pkt = Create<Packet>((uint32_t)g_config.packetSize);
+    int sent = flows[flowIdx].socket->Send(pkt);
+    
+    // 记录发送事件（供前端可视化）
+    if (sent > 0 && g_transLog.is_open()) {
+        g_transLog << Simulator::Now().GetSeconds() << "," 
+                   << nodeId << ",TX_TDMA\n";
+    }
+}
+
+/**
+ * Bonus 时隙突发发送
+ *
+ * 在借用的 bonus 时隙内发送额外数据包
+ * 每帧由 TDMABurstSend 调度，非自递归（避免旧 bonus 泄漏）
+ */
+void TDMABonusBurst(uint32_t nodeId, uint32_t bonusSlotId) {
+    // 安全检查：确认 bonus 时隙仍然有效（可能已被回收）
+    auto it = g_tdma.bonusSlots.find(nodeId);
+    if (it == g_tdma.bonusSlots.end()) return;
+    auto& slots = it->second;
+    bool stillValid = false;
+    for (uint32_t s : slots) {
+        if (s == bonusSlotId) { stillValid = true; break; }
+    }
+    if (!stillValid) return;
+    
+    // 发送 bonusPktsPerSlot 个包
+    auto flowIt = g_tdma.nodeFlows.find(nodeId);
+    if (flowIt == g_tdma.nodeFlows.end() || flowIt->second.empty()) return;
+    
+    uint32_t numFlows = (uint32_t)flowIt->second.size();
+    uint32_t totalPkts = g_tdma.bonusPktsPerSlot;
+    double effectiveSlot = g_tdma.slotDuration - 2.0 * g_tdma.guardTime;
+    double pktInterval = (totalPkts > 1) ? effectiveSlot / (totalPkts - 1) : 0.0;
+    
+    for (uint32_t p = 0; p < totalPkts; ++p) {
+        double offset = g_tdma.guardTime + p * pktInterval;
+        uint32_t flowIdx = p % numFlows;
+        Simulator::Schedule(Seconds(offset), &SendTDMAPacket, nodeId, flowIdx);
+    }
+    
+    // 记录 bonus 发送事件
+    if (g_transLog.is_open()) {
+        g_transLog << Simulator::Now().GetSeconds() << "," 
+                   << nodeId << ",TX_BONUS_SLOT" << bonusSlotId << "\n";
+    }
+}
+
+/**
+ * TDMA 时隙突发发送
+ *
+ * 在分配给该节点的时隙内，集中发送所有累积数据包
+ * 发送完毕后自动调度下一帧的突发
+ *
+ * 时序示意:
+ *   |<--------- cycleDuration --------->|
+ *   | Slot0 | Slot1 | ... | Slot(G-1)  |
+ *   |  ↑ 节点A在此发送突发包             |
+ *   |       |  ↑ 节点B在此发送            |
+ *   |                                   |
+ *   └─── 自动调度到下一帧的同一时隙 ──────┘
+ */
+/**
+ * 主时隙突发发送 + Bonus 时隙调度
+ *
+ * 每帧周期调用一次，完成两件事：
+ *   1. 在主时隙内发送 perNodePackets[nodeId] 个包
+ *   2. 如果有 bonus 时隙，调度 TDMABonusBurst
+ */
+void TDMABurstSend(uint32_t nodeId) {
+    if (Simulator::Now().GetSeconds() >= g_config.duration - 0.5) return;
+    
+    auto it = g_tdma.nodeFlows.find(nodeId);
+    if (it == g_tdma.nodeFlows.end() || it->second.empty()) {
+        Simulator::Schedule(Seconds(g_tdma.cycleDuration), &TDMABurstSend, nodeId);
+        return;
+    }
+    
+    // ---- 1. 主时隙突发 ----
+    auto& flows = it->second;
+    uint32_t numFlows = (uint32_t)flows.size();
+    
+    // ★ 使用 per-node 动态包预算
+    uint32_t totalPkts = g_tdma.perNodePackets.count(nodeId) ? 
+                         g_tdma.perNodePackets[nodeId] : g_tdma.basePacketsPerSlot;
+    
+    double effectiveSlot = g_tdma.slotDuration - 2.0 * g_tdma.guardTime;
+    double pktInterval = (totalPkts > 1) ? effectiveSlot / (totalPkts - 1) : 0.0;
+    
+    for (uint32_t p = 0; p < totalPkts; ++p) {
+        double offset = g_tdma.guardTime + p * pktInterval;
+        uint32_t flowIdx = p % numFlows;
+        Simulator::Schedule(Seconds(offset), &SendTDMAPacket, nodeId, flowIdx);
+    }
+    
+    // ---- 2. 调度 Bonus 时隙突发 ----
+    auto bonusIt = g_tdma.bonusSlots.find(nodeId);
+    if (bonusIt != g_tdma.bonusSlots.end()) {
+        uint32_t mySlot = g_tdma.slotAssignment[nodeId];
+        
+        for (uint32_t bonusSlotId : bonusIt->second) {
+            // 计算 bonus 时隙相对于当前主时隙的时间偏移
+            double delay;
+            if (bonusSlotId > mySlot) {
+                delay = (bonusSlotId - mySlot) * g_tdma.slotDuration;
+            } else {
+                // 在帧内更早的位置 → 等到下一帧的该位置
+                // 不过由于 TDMABurstSend 在主时隙开始时触发，
+                // 更早的 bonus 已经过了，需要绕一圈
+                delay = (g_tdma.numGroups - mySlot + bonusSlotId) * g_tdma.slotDuration;
+            }
+            
+            Simulator::Schedule(Seconds(delay), &TDMABonusBurst, nodeId, bonusSlotId);
+        }
+    }
+    
+    // ---- 3. 调度下一帧的主时隙突发 ----
+    Simulator::Schedule(Seconds(g_tdma.cycleDuration), &TDMABurstSend, nodeId);
 }
 
 /**
@@ -637,14 +1409,9 @@ void PerformResourceReallocation() {
         NS_LOG_INFO("时间 " << currentTime << "s: 执行资源重分配逻辑 (2Hz)");
         // 2. 如果策略是 dynamic，则执行智能抗干扰集群调度
         if (g_config.allocationStrategy == "dynamic") {
-            // 执行信道分配
             DynamicChannelAllocation();
-            
-            // 执行功率控制
-            DynamicPowerControl();
-            
-            // 执行速率调整
             AdaptiveRateControl();
+            DynamicPowerControl();
         } else {
             // static (Baseline): 啥都不干，坐以待毙（被干扰、被建筑物挡死）
             NS_LOG_INFO("Baseline (static) 模式，保持固定粗放的资源分配");
@@ -661,11 +1428,15 @@ void PerformResourceReallocation() {
                      << "," << g_state.powerAssignment[i]
                      << "," << g_state.rateAssignment[i];
                      
-        // Detailed log: time,node_id,channel,tx_power,data_rate,neighbors,interference
-        // 估算一个干扰值: 基线加上因为信道拥挤而产生的随机浮动
-        double interference = 0.01 + 0.005 * g_state.neighbors[i].size(); 
-        if (g_config.allocationStrategy == "static") {
-            interference *= 2.0; // 静态分配时干扰加倍
+        double interference_mW = CalculateInterference_mW(i, i);
+        double interference_dBm = mwToDbm(interference_mW + 1e-20);
+        
+        double worstSINR = 0.0;
+        if (!g_state.neighbors[i].empty()) {
+            worstSINR = 100.0;
+            for (uint32_t neighborId : g_state.neighbors[i]) {
+                worstSINR = std::min(worstSINR, EstimateSINR(i, neighborId));
+            }
         }
         
         g_resourceDetailedLog << currentTime << ","
@@ -674,7 +1445,8 @@ void PerformResourceReallocation() {
                               << g_state.powerAssignment[i] << ","
                               << g_state.rateAssignment[i] << ","
                               << g_state.neighbors[i].size() << ","
-                              << interference << "\n";
+                              << interference_dBm << ","
+                              << worstSINR << "\n";
     }
     g_resourceLog << std::endl;
     
@@ -934,6 +1706,100 @@ void SetupMixedTraffic() {
     NS_LOG_INFO("混合业务与路由设置完成，共 " << (g_uavNodes.GetN() * 2) << " 条流");
 }
 
+/**
+ * 设置 TDMA 调度的业务流量
+ *
+ * 与 SetupMixedTraffic 的区别：
+ *   - 发送端使用原始 Socket API + 定时突发，而非 OnOff 连续流
+ *   - 只在分配的时隙内发送，消除 UAV 集群内部碰撞
+ *   - 接收端仍使用 PacketSink（始终监听）
+ *
+ * 流量拓扑保持一致：每节点2条流
+ *   流1: i → (i+1)%n  (近距离飞控)
+ *   流2: i → (i+n/2)%n (远程图传)
+ */
+void SetupTDMATraffic() {
+    NS_LOG_INFO("设置 TDMA 调度业务流量...");
+    
+    uint32_t n = g_uavNodes.GetN();
+    uint16_t port = 9000;
+    
+    // ---- 1. 计算空间复用分组 ----
+    ComputeTDMASlots();
+    
+    // ---- 2. 为每个节点创建发送 Socket 和接收 PacketSink ----
+    for (uint32_t i = 0; i < n; ++i) {
+        uint32_t dst1 = (i + 1) % n;
+        uint32_t dst2 = (i + n / 2) % n;
+        if (dst2 == i) dst2 = (i + 2) % n;
+        
+        uint32_t dsts[2] = {dst1, dst2};
+        
+        for (int k = 0; k < 2; ++k) {
+            uint32_t j = dsts[k];
+            
+            // 接收端: PacketSink（始终监听，无需TDMA控制）
+            Ptr<Ipv4> dstIpv4 = g_uavNodes.Get(j)->GetObject<Ipv4>();
+            Ipv4Address dstAddr = dstIpv4->GetAddress(1, 0).GetLocal();
+            
+            PacketSinkHelper sink("ns3::UdpSocketFactory",
+                                  InetSocketAddress(Ipv4Address::GetAny(), port));
+            ApplicationContainer sinkApp = sink.Install(g_uavNodes.Get(j));
+            sinkApp.Start(Seconds(0.5));
+            sinkApp.Stop(Seconds(g_config.duration));
+            
+            // 发送端: 原始 UDP Socket
+            Ptr<Socket> socket = Socket::CreateSocket(
+                g_uavNodes.Get(i), UdpSocketFactory::GetTypeId());
+            socket->Bind();
+            socket->Connect(InetSocketAddress(dstAddr, port));
+            
+            // 记录到 TDMA 管理器
+            TDMAManager::FlowEntry flow;
+            flow.dstId  = j;
+            flow.socket = socket;
+            g_tdma.nodeFlows[i].push_back(flow);
+            
+            port++;
+        }
+    }
+    
+    // ---- 3. 调度每个节点的首次突发 ----
+    // 每个节点在自己的时隙起始时刻开始第一次突发
+    for (uint32_t i = 0; i < n; ++i) {
+        uint32_t mySlot = g_tdma.slotAssignment[i];
+        double firstBurstTime = g_tdma.trafficStartTime + mySlot * g_tdma.slotDuration;
+        
+        Simulator::Schedule(Seconds(firstBurstTime), &TDMABurstSend, i);
+    }
+
+    //   在业务启动后等待一段时间收集 QoS 数据再开始调节
+    double firstReallocationTime = g_tdma.trafficStartTime + g_tdma.reallocationInterval;
+    Simulator::Schedule(Seconds(firstReallocationTime), &DynamicTDMAReallocation);
+    NS_LOG_INFO("  动态 TDMA 重分配已启用: 首次触发 @" << firstReallocationTime 
+                << "s, 间隔 " << g_tdma.reallocationInterval << "s");
+    
+    // ---- 4. 写入 TDMA 调度日志（初始状态）----
+    if (g_tdmaLog.is_open()) {
+        for (uint32_t i = 0; i < n; ++i) {
+            std::string bonusStr = "none";
+            g_tdmaLog << 0.0 << "," 
+                      << i << ","
+                      << g_tdma.slotAssignment[i] << ","
+                      << g_tdma.numGroups << ","
+                      << g_tdma.perNodePackets[i] << ","
+                      << bonusStr << ","
+                      << g_tdma.urgency[i] << "\n";
+        }
+    }
+    
+    NS_LOG_INFO("TDMA 业务设置完成: " << n << " 节点, " 
+                << n * 2 << " 条流, "
+                << g_tdma.numGroups << " 个时隙/帧, "
+                << "帧周期 " << g_tdma.cycleDuration * 1000.0 << "ms, "
+                << "基准 " << g_tdma.basePacketsPerSlot << " 包/时隙");
+}
+
 // ==================== 创建恶意干扰/黑飞节点 (Phase 4) ====================
 void CreateInterferenceNodes(Ptr<YansWifiChannel> channel)
 {
@@ -1158,6 +2024,7 @@ int main(int argc, char *argv[])
     cmd.AddValue("formation", "编队模式 (v_formation/cross/line/triangle，空=随机游走)", formation);
     cmd.AddValue("difficulty","难度等级 (Easy/Moderate/Hard)", difficulty);
     cmd.AddValue("mapFile",   "自定义城市建筑物地图 (可为空)", mapFile);
+    cmd.AddValue("tdmaInterval", "TDMA 重分配间隔(秒)", g_tdma.reallocationInterval);
     cmd.Parse(argc, argv);
     
     // 如果指定了编队模式，尝试加载轨迹文件
@@ -1200,6 +2067,9 @@ int main(int argc, char *argv[])
     std::cout << "难度等级: " << difficulty << std::endl;
     std::cout << "目标PDR: " << g_config.targetPDR * 100 << "%" << std::endl;
     std::cout << "最大时延: " << g_config.maxEndToEndDelay * 1000 << " ms" << std::endl;
+    std::cout << "分配策略: " << g_config.allocationStrategy << std::endl;
+    std::cout << "速率范围: [" << g_config.dataRateMin << ", " << g_config.dataRateMax << "] Mbps" << std::endl;
+    std::cout << "MAC调度: " << (g_config.enableTDMA ? "软TDMA (空间复用)" : "CSMA/CA (标准竞争)") << std::endl; 
     std::cout << "========================================" << std::endl;
     
     // 创建输出目录
@@ -1218,11 +2088,14 @@ int main(int argc, char *argv[])
     g_posLog.open(g_config.outputDir + "/rtk-node-positions.csv");
     g_topoChangesLog.open(g_config.outputDir + "/rtk-topology-changes.txt");
     g_transLog.open(g_config.outputDir + "/rtk-node-transmissions.csv");
+
+    g_tdmaLog.open(g_config.outputDir + "/tdma_schedule.csv");
+    g_tdmaLog << "time,node_id,slot_id,num_groups,packets_per_slot,bonus_slots,urgency\n";
     
     // 写入CSV表头
     g_posLog << "time,nodeId,x,y,z,node_type,speed\n";
     g_transLog << "time,nodeId,eventType\n";
-    g_resourceDetailedLog << "time,node_id,channel,tx_power,data_rate,neighbors,interference\n";
+    g_resourceDetailedLog << "time,node_id,channel,tx_power,data_rate,neighbors,interference_dBm,worst_sinr_dB\n";
     g_topologyDetailedLog << "time,num_nodes,num_links,avg_degree,network_density\n";
     g_topologyEvolutionLog << "time,num_links,connectivity\n";
     g_topologyLog << "time,num_links,connectivity\n";
@@ -1289,7 +2162,9 @@ int main(int argc, char *argv[])
     // Moderate: 标准城郊环境: 中等路径损耗
     // Hard:     复杂遮蔽环境: 高路径损耗, 低接收灵敏度
     double pathLossExp   = 2.0;    // Easy 默认
+    g_pathLossExponent = pathLossExp;
     double rxSensitivity = -90.0;  // Easy 默认 (更灵敏)
+    g_config.rxSensitivity = rxSensitivity;
     double txPower       = 23.0;   // 23 dBm
     // Phase 4: 初始化难度参数
     g_diffParams.levelName = difficulty;
@@ -1299,7 +2174,9 @@ int main(int argc, char *argv[])
         // txPower       = 23.0;
 
         pathLossExp   = 2.5;     // 从 2.7 微调到 2.5
+        g_pathLossExponent = pathLossExp;
         rxSensitivity = -85.0;   // 从 -82 改为 -85
+        g_config.rxSensitivity = rxSensitivity;
         txPower       = 23.0;
         
         g_diffParams.rtkNoiseStdDev = 0.08;
@@ -1314,7 +2191,9 @@ int main(int argc, char *argv[])
         // txPower       = 26.0;  // 适当增大发射功率以补偿损耗
 
         pathLossExp   = 3.0;     // 从 3.5 降到 3.0（城市环境合理值）
+        g_pathLossExponent = pathLossExp;
         rxSensitivity = -82.0;   // 从 -74 改为 -82（仍比 Easy 的 -90 差）
+        g_config.rxSensitivity = rxSensitivity;
         txPower       = 26.0;    // 不变
         
         g_diffParams.rtkNoiseStdDev = 0.2;
@@ -1430,7 +2309,8 @@ int main(int argc, char *argv[])
     // Ipv4GlobalRoutingHelper::PopulateRoutingTables();
     
     // 设置业务流量
-    SetupMixedTraffic();
+    g_tdma.enabled = true;
+    SetupTDMATraffic();
     
     // 安装FlowMonitor
     // g_flowMonitor = g_flowHelper.InstallAll();
@@ -1536,6 +2416,7 @@ int main(int argc, char *argv[])
     g_posLog.close();
     g_topoChangesLog.close();
     g_transLog.close();
+    if (g_tdmaLog.is_open()) g_tdmaLog.close();
     
     g_resourceLog.close();
     g_resourceDetailedLog.close();

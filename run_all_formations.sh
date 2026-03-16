@@ -1,92 +1,136 @@
 #!/bin/bash
 # ============================================================
-# 批量运行 4 种编队仿真，生成数据包说明.txt 中对应的所有输出
-#
-# 使用方法：
-#   bash run_all_formations.sh              # 运行全部 4 种编队
-#   bash run_all_formations.sh v_formation  # 只运行 V 字编队
-#
-# 输出目录结构：
-#   output/cross/          ← 十字形编队
-#   output/line/           ← 直线形编队
-#   output/triangle/       ← 三角形编队
-#   output/v_formation/    ← V字形编队
+# 算法对比批量仿真脚本
+# 用法: chmod +x run_benchmark.sh && ./run_benchmark.sh
 # ============================================================
 
-NS3_DIR="$(cd "$(dirname "$0")" && pwd)"
-TRACE_DIR="$NS3_DIR/data_rtk"
-OUTPUT_ROOT="$NS3_DIR/output"
+# 编译两个版本的可执行文件
+# 假设原版代码编译产物为 uav_old，修正版为 uav_new
+# 根据你的 ns-3 构建方式调整路径
+NS3_DIR="."  # ns-3 根目录
 
-# 编队名称 → 对应的轨迹文件
-declare -A TRACE_FILES=(
-    ["cross"]="$TRACE_DIR/mobility_trace_cross.txt"
-    ["line"]="$TRACE_DIR/mobility_trace_line.txt"
-    ["triangle"]="$TRACE_DIR/mobility_trace_triangle.txt"
-    ["v_formation"]="$TRACE_DIR/mobility_trace_v_formation.txt"
-)
+# ---- 配置 ----
+FORMATIONS=("v_formation" "cross" "line" "triangle")
+DIFFICULTIES=("Easy" "Moderate" "Hard")
+DURATION=200
+MAP_EASY=""
+MAP_MODERATE="data_rtk/city_map_moderate.txt"
+MAP_HARD="data_rtk/city_map_hard.txt"
 
-# 如果指定了参数则只跑该编队，否则跑全部
-if [ -n "$1" ]; then
-    FORMATIONS=("$1")
-else
-    FORMATIONS=("cross" "line" "triangle" "v_formation")
-fi
+# 根据难度选择地图文件
+get_map() {
+    local diff=$1
+    case $diff in
+        Easy)     echo "" ;;
+        Moderate) echo "$MAP_MODERATE" ;;
+        Hard)     echo "$MAP_HARD" ;;
+    esac
+}
 
-# ── 主循环 ──────────────────────────────────────────────────
-for FORMATION in "${FORMATIONS[@]}"; do
+echo "=========================================="
+echo "  算法对比批量仿真 (共 $((${#FORMATIONS[@]} * ${#DIFFICULTIES[@]} * 3)) 次)"
+echo "=========================================="
 
-    TRACE_FILE="${TRACE_FILES[$FORMATION]}"
+# # ============ 第1组: Static 基线 ============
+# echo ""
+# echo ">>> 第1组: Static 基线 (使用修正版代码, strategy=static)"
+# for formation in "${FORMATIONS[@]}"; do
+#     for difficulty in "${DIFFICULTIES[@]}"; do
+#         map=$(get_map "$difficulty")
+#         outdir="output/compare/static_${formation}_${difficulty}"
+        
+#         echo "[Static] formation=$formation difficulty=$difficulty"
+        
+#         cmd="./ns3 run 'uav_resource_allocation
+#             --formation=$formation
+#             --difficulty=$difficulty
+#             --strategy=static
+#             --duration=$DURATION
+#             --outputDir=$outdir'"
+        
+#         # 如果有地图文件
+#         if [ -n "$map" ]; then
+#             cmd="./ns3 run 'uav_resource_allocation
+#                 --formation=$formation
+#                 --difficulty=$difficulty
+#                 --strategy=static
+#                 --duration=$DURATION
+#                 --outputDir=$outdir
+#                 --mapFile=$map'"
+#         fi
+        
+#         eval $cmd 2>&1 | tail -5
+#         echo "  -> 输出: $outdir"
+#     done
+# done
 
-    # 检查编队名是否合法
-    if [ -z "$TRACE_FILE" ]; then
-        echo "❌ 未知编队名: $FORMATION"
-        echo "   可选: cross / line / triangle / v_formation"
-        exit 1
-    fi
+# # ============ 第2组: 原版 Dynamic ============
+# echo ""
+# echo ">>> 第2组: 原版 Dynamic (原代码编译, strategy=dynamic)"
+# for formation in "${FORMATIONS[@]}"; do
+#     for difficulty in "${DIFFICULTIES[@]}"; do
+#         map=$(get_map "$difficulty")
+#         outdir="output/compare/old_dynamic_${formation}_${difficulty}"
+        
+#         echo "[OldDynamic] formation=$formation difficulty=$difficulty"
+        
+#         cmd="./ns3 run 'uav_resource_allocation_old
+#             --formation=$formation
+#             --difficulty=$difficulty
+#             --strategy=dynamic
+#             --duration=$DURATION
+#             --outputDir=$outdir'"
+        
+#         if [ -n "$map" ]; then
+#             cmd="./ns3 run 'uav_resource_allocation_old
+#                 --formation=$formation
+#                 --difficulty=$difficulty
+#                 --strategy=dynamic
+#                 --duration=$DURATION
+#                 --outputDir=$outdir
+#                 --mapFile=$map'"
+#         fi
+        
+#         eval $cmd 2>&1 | tail -5
+#         echo "  -> 输出: $outdir"
+#     done
+# done
 
-    # 检查轨迹文件是否存在
-    if [ ! -f "$TRACE_FILE" ]; then
-        echo "❌ 轨迹文件不存在: $TRACE_FILE"
-        exit 1
-    fi
-
-    OUTPUT_DIR="$OUTPUT_ROOT/$FORMATION"
-    mkdir -p "$OUTPUT_DIR"
-
-    echo ""
-    echo "============================================================"
-    echo "🚀 运行编队仿真: $FORMATION"
-    echo "   轨迹文件: $TRACE_FILE"
-    echo "   输出目录: $OUTPUT_DIR"
-    echo "============================================================"
-
-    # 运行 NS-3 仿真
-    cd "$NS3_DIR"
-    ./ns3 run "rtk_simulation \
-        --trajectory=$TRACE_FILE \
-        --outputDir=$OUTPUT_DIR"
-
-    if [ $? -eq 0 ]; then
-        echo ""
-        echo "✅ [$FORMATION] 仿真完成，已生成以下文件:"
-        for f in rtk-node-positions.csv rtk-node-transmissions.csv rtk-flow-stats.csv rtk-topology-changes.txt rtk-flowmon.xml; do
-            FULLPATH="$OUTPUT_DIR/$f"
-            if [ -f "$FULLPATH" ]; then
-                SIZE=$(du -h "$FULLPATH" | cut -f1)
-                echo "   ✓ $f  ($SIZE)"
-            else
-                echo "   ✗ $f  (未生成！)"
-            fi
-        done
-    else
-        echo "❌ [$FORMATION] 仿真运行失败！"
-        exit 1
-    fi
-
+# ============ 第3组: 修正版 Dynamic ============
+echo ""
+echo ">>> 第3组: 修正版 Dynamic (修正代码编译, strategy=dynamic)"
+for formation in "${FORMATIONS[@]}"; do
+    for difficulty in "${DIFFICULTIES[@]}"; do
+        map=$(get_map "$difficulty")
+        outdir="output/compare/new_dynamic_${formation}_${difficulty}"
+        
+        echo "[NewDynamic] formation=$formation difficulty=$difficulty"
+        
+        cmd="./ns3 run 'uav_resource_allocation
+            --formation=$formation
+            --difficulty=$difficulty
+            --strategy=dynamic
+            --duration=$DURATION
+            --outputDir=$outdir'"
+        
+        if [ -n "$map" ]; then
+            cmd="./ns3 run 'uav_resource_allocation
+                --formation=$formation
+                --difficulty=$difficulty
+                --strategy=dynamic
+                --duration=$DURATION
+                --outputDir=$outdir
+                --mapFile=$map'"
+        fi
+        
+        eval $cmd 2>&1 | tail -5
+        echo "  -> 输出: $outdir"
+    done
 done
 
 echo ""
-echo "============================================================"
-echo "🎉 全部编队仿真完成！输出目录: $OUTPUT_ROOT"
-echo "============================================================"
-ls -lh "$OUTPUT_ROOT"/
+echo "=========================================="
+echo "  全部仿真完成！开始分析..."
+echo "=========================================="
+
+python3 analyze_comparison.py
