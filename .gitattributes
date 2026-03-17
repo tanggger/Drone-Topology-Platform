@@ -2,3 +2,15 @@ benchmark/*/flowmon.xml filter=lfs diff=lfs merge=lfs -text
 benchmark/*/node-transmissions.csv filter=lfs diff=lfs merge=lfs -text
 *.so filter=lfs diff=lfs merge=lfs -text
 *.gch filter=lfs diff=lfs merge=lfs -text
+
+* text=auto eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+
+*.bat text eol=crlf
+*.cmd text eol=crlf
