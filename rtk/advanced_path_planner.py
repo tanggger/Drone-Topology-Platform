@@ -337,7 +337,7 @@ class AdvancedDroneSwarm:
 
     def __init__(self, num_drones=15, start_pos=(0, 0, 30),
                  target_pos=(0, 500, 30), formation="v_formation",
-                 map_file=None, dt=0.1):
+                 spacing=12.0, map_file=None, dt=0.1):
         self.num_drones = num_drones
         self.start_pos = np.array(start_pos, dtype=float)
         self.target_pos = np.array(target_pos, dtype=float)
@@ -356,7 +356,7 @@ class AdvancedDroneSwarm:
         self.default_bld_h = 80.0
 
         # 编队
-        self.formation_gap = 12.0
+        self.formation_gap = float(spacing)
         self.sep_trigger = self.formation_gap * 0.5
 
         # GPS
@@ -1082,6 +1082,7 @@ if __name__ == "__main__":
     parser.add_argument('--output', type=str,
                         default='../data_rtk/mobility_trace_custom.txt')
     parser.add_argument('--dt', type=float, default=0.1)
+    parser.add_argument('--spacing', type=float, default=12.0)
 
     args = parser.parse_args()
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1098,6 +1099,7 @@ if __name__ == "__main__":
         num_drones=args.num_drones,
         start_pos=sp, target_pos=tp,
         formation=args.formation,
+        spacing=args.spacing,
         map_file=args.map, dt=args.dt,
     )
 

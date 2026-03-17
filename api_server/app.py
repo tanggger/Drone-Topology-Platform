@@ -47,6 +47,7 @@ def run_simulation_task(task_id, config):
         target_pos = config.get("target", "0,600,30")
         difficulty = config.get("difficulty", "Easy")
         strategy = config.get("strategy", "dynamic")
+        formation_spacing = float(config.get("formation_spacing", 12.0))
         buildings = config.get("buildings", [])
         map_name = config.get("map_name", None)
 
@@ -77,6 +78,7 @@ def run_simulation_task(task_id, config):
         hash_params = {
             "num_drones": num_drones,
             "formation": formation,
+            "formation_spacing": formation_spacing,
             "start": start_pos,
             "target": target_pos,
             "difficulty": difficulty,
@@ -138,6 +140,7 @@ def run_simulation_task(task_id, config):
             sys.executable, "rtk/advanced_path_planner.py",
             "--num_drones", str(num_drones),
             "--formation", formation,
+            "--spacing", str(formation_spacing),
             f"--start={start_pos}",    # 使用=连接，防止负数坐标被误判为参数flag
             f"--target={target_pos}",  # 使用=连接，防止负数坐标被误判为参数flag
             "--map", map_file,
@@ -315,18 +318,32 @@ def get_results(task_id):
                         # 将两个 DataFrame 的时间列都四舍五入到 3 位小数 (根据 ns-3 常见精度)
                         df_pos['time_merge_key'] = df_pos[merge_on_time].round(3)
                         df_res['time_merge_key'] = df_res[merge_on_time].round(3)
+
+                        # 处理列名兼容性 (interference -> interference_dBm)
+                        if 'interference_dBm' in df_res.columns and 'interference' not in df_res.columns:
+                            df_res.rename(columns={'interference_dBm': 'interference'}, inplace=True)
                         
+                        # 准备要合并的列
+                        merge_cols = ['time_merge_key', 'nodeId', 'tx_power', 'channel', 'data_rate', 'neighbors']
+                        if 'interference' in df_res.columns:
+                            merge_cols.append('interference')
+                        if 'worst_sinr_dB' in df_res.columns:
+                            merge_cols.append('worst_sinr_dB')
+
                         print(f"[{task_id}] 数据合并调试: Pos Time Range: {df_pos['time_merge_key'].min()}~{df_pos['time_merge_key'].max()}, Sample: {df_pos['time_merge_key'].iloc[0]}")
                         print(f"[{task_id}] 数据合并调试: Res Time Range: {df_res['time_merge_key'].min()}~{df_res['time_merge_key'].max()}, Sample: {df_res['time_merge_key'].iloc[0]}")
 
                         # 3. 执行左连接合并 (使用 round 后的 key)
-                        merged_df = pd.merge(df_pos, df_res[['time_merge_key', 'nodeId', 'tx_power', 'interference', 'channel', 'data_rate', 'neighbors']], 
+                        merged_df = pd.merge(df_pos, df_res[merge_cols], 
                                            on=['time_merge_key', 'nodeId'], 
                                            how='left')
                         
                         # 4. 重命名列以适配前端 (tx_power -> power)
                         if 'tx_power' in merged_df.columns:
                             merged_df.rename(columns={'tx_power': 'power'}, inplace=True)
+                        # 重命名 worst_sinr_dB -> sinr 以方便前端使用
+                        if 'worst_sinr_dB' in merged_df.columns:
+                            merged_df.rename(columns={'worst_sinr_dB': 'sinr'}, inplace=True)
                         
                         # 清理临时 key
                         if 'time_merge_key' in merged_df.columns:
