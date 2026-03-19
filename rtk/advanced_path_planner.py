@@ -536,12 +536,19 @@ class AdvancedDroneSwarm:
                 if col > row:
                     row += 1; col = 0
         elif self.formation_type == "cross":
-            for i in range(self.num_drones):
-                if i == 0:   off[i] = [0, 0, 0]
-                elif i < 5:  off[i] = [0, g * i, 0]
-                elif i < 9:  off[i] = [0, -g * (i - 4), 0]
-                elif i < 12: off[i] = [g * (i - 8), 0, 0]
-                else:        off[i] = [-g * (i - 11), 0, 0]
+            off[0] = [0, 0, 0]
+            # Evenly grow the four arms so "cross" stays cross-like for any fleet size.
+            arm_dirs = [
+                np.array([0.0, 1.0, 0.0]),   # +Y
+                np.array([0.0, -1.0, 0.0]),  # -Y
+                np.array([1.0, 0.0, 0.0]),   # +X
+                np.array([-1.0, 0.0, 0.0]),  # -X
+            ]
+            arm_counts = [0, 0, 0, 0]
+            for i in range(1, self.num_drones):
+                arm_idx = (i - 1) % 4
+                arm_counts[arm_idx] += 1
+                off[i] = arm_dirs[arm_idx] * (g * arm_counts[arm_idx])
         return off
 
     # ────────────────────────────────────────────────

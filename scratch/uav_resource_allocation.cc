@@ -1833,6 +1833,11 @@ void CreateInterferenceNodes(Ptr<YansWifiChannel> channel)
     double area             = g_config.areaSize;
     double baseZ            = g_config.uavHeight; // 与无人机集群初始高度一致
     double waypointInterval = 15.0;               // 每15秒生成一个随机航路点
+    // Use one consistent movement box for both spawn and later wandering.
+    const double safeMinX = std::max(0.0, g_config.minX + margin);
+    const double safeMinY = std::max(0.0, g_config.minY + margin);
+    const double safeMaxX = std::max(safeMinX + 1.0, g_config.maxX - margin);
+    const double safeMaxY = std::max(safeMinY + 1.0, g_config.maxY - margin);
 
     for (uint32_t i = 0; i < g_interferenceNodes.GetN(); ++i) {
         Ptr<WaypointMobilityModel> wpm =
@@ -1843,12 +1848,6 @@ void CreateInterferenceNodes(Ptr<YansWifiChannel> channel)
         int initRetries = 20;
         
         while (initRetries-- > 0) {
-            // 使用动态计算的场景边界，并强制限制在非负区域 (0,0) 以上，防止生成到负半轴
-            double safeMinX = std::max(0.0, g_config.minX + margin);
-            double safeMinY = std::max(0.0, g_config.minY + margin);
-            double safeMaxX = std::max(safeMinX + 1.0, g_config.maxX - margin); // 确保 max > min
-            double safeMaxY = std::max(safeMinY + 1.0, g_config.maxY - margin);
-
             curX = rng->GetValue(safeMinX, safeMaxX);
             curY = rng->GetValue(safeMinY, safeMaxY);
             curZ = rng->GetValue(baseZ - 10.0, baseZ + 10.0);
@@ -1891,11 +1890,12 @@ void CreateInterferenceNodes(Ptr<YansWifiChannel> channel)
                 double candY = curY + rng->GetValue(-100.0, 100.0);
                 double candZ = curZ + rng->GetValue(-10.0, 10.0);
                 
-                // 边界回弹 (使用动态边界)
-                if (candX < g_config.minX + margin) candX = g_config.minX + margin + 10;
-                if (candX > g_config.maxX - margin) candX = g_config.maxX - margin - 10;
-                if (candY < g_config.minY + margin) candY = g_config.minY + margin + 10;
-                if (candY > g_config.maxY - margin) candY = g_config.maxY - margin - 10;
+                // 边界回弹：must match the spawn bounds, otherwise nodes can drift outside
+                // the visible positive-quadrant scene even if they spawned inside it.
+                if (candX < safeMinX) candX = safeMinX + 10;
+                if (candX > safeMaxX) candX = safeMaxX - 10;
+                if (candY < safeMinY) candY = safeMinY + 10;
+                if (candY > safeMaxY) candY = safeMaxY - 10;
                 candZ = std::max(baseZ - 15.0, std::min(baseZ + 30.0, candZ));
 
                 // --- 关键修复：全路径碰撞检测 ---
