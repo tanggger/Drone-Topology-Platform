@@ -1,127 +1,192 @@
-# UAV网络仿真平台 (UAV Network Simulation Platform)
+# NS-3 UAV Network Simulation Workspace
 
-## 📋 概述 (Overview)
+这个仓库是在 `ns-3.43` 基础上扩展出来的无人机网络仿真工作区，当前保留 4 条主线：
 
-本项目基于 **ns-3** 构建了一个模块化、插件化的无人机网络仿真平台。通过 `UavSimHelper` 统一编排，支持灵活的场景配置（如侦察、编队、蜂群）、多级难度调节以及详细的数据采集。
+1. `uav_resource_allocation`
+   面向无人机编队通信与动态资源分配的主仿真程序。
+2. `rtk_benchmark`
+   面向 4 种编队、3 种难度的 RTK Benchmark 批量实验。
+3. RTK 预处理与可视化
+   包括轨迹生成、对齐、可视化和研究型分析脚本。
+4. 前后端数字孪生演示
+   Flask 后端接收前端参数，生成轨迹、运行 ns-3、返回结果。
 
-核心设计理念是将**移动性**、**信道模型**、**通信负载**和**数据采集**解耦为独立的插件，用户可以像搭积木一样组合不同的仿真要素。
+## 目录说明
 
----
+- `scratch/`
+  自定义 ns-3 主程序。当前保留的核心入口是 `uav_resource_allocation.cc`、`rtk_benchmark.cc`、`rtk_simulation.cc`。
+- `rtk/`
+  RTK 数据预处理、轨迹生成、测试和可视化研究。
+- `visualization/`
+  RTK 轨迹和通信拓扑动画工具。
+- `api_server/`
+  前后端演示用 Flask API。
+- `benchmark/`
+  Benchmark 结果、参数说明、指标分析文档。
+- `data_rtk/`
+  轨迹输入文件。
+- `data_map/`
+  地图和建筑物输入文件。
+- `tools/`
+  辅助脚本和一次性处理工具，例如轨迹绘图、OSM 检查、对比分析脚本。
+- `samples/`
+  零散样例文件、测试输入和历史配置样本。
+- `notes/`
+  补充说明材料、原型页面和归档资料。
+- `src/`, `examples/`, `doc/`, `utils/`
+  ns-3 自带源码和文档。
 
-## 💻 仿真代码与逻辑 (Simulation Code & Logic)
+## 核心程序
 
-以 `scratch/uav_simple_example.cc` 为代表，仿真流程如下：
+### 1. 资源分配主线
 
-### 1. 初始化与配置
-```cpp
-UavSimHelper sim;
-sim.SetName("Simple Example")
-   .SetDuration(100.0)      // 仿真时长
-   .SetNumNodes(20)         // 节点数量
-   .SetOutputDir("output"); // 数据输出目录
-```
+入口文件：
 
-### 2. 场景选择 (Scenario Selection)
-框架预置了多种典型任务场景，自动加载默认的插件组合：
-- **`sim.ReconnaissanceScenario()`**: 侦察任务（RTK轨迹 + 城市信道 + 事件驱动通信）
-- **`sim.FormationScenario()`**: 编队飞行（编队移动模型 + 理想信道 + 周期性通信）
-- **`sim.SwarmScenario()`**: 蜂群协作（随机游走 + 混合业务）
+- `scratch/uav_resource_allocation.cc`
+- `run_uav_simulation.sh`
+- `analyze_resource_allocation.py`
+- `visualize_results.py`
 
-### 3. 运行机制 (Execution Flow)
-当调用 `sim.Run()` 时，内部逻辑如下：
-1.  **加载插件**: 根据配置（如 "rtk-mobility", "urban-channel"）实例化相应的 C++ 对象。
-2.  **环境初始化**: 创建 ns-3 节点，安装网卡、协议栈和移动模型。
-3.  **事件循环**: 
-    - **移动性插件**更新节点位置（支持RTK轨迹回放、漂移、噪声）。
-    - **业务插件**根据逻辑（如距离、概率）触发通信事件。
-    - **信道插件**计算路径损耗、衰落和干扰。
-    - **采集插件**监听全网事件并记录数据。
-4.  **清理**: 仿真结束，刷新缓冲区，生成数据文件。
+用途：
 
----
+- 加载编队轨迹
+- 构建无人机自组网
+- 执行动态信道/功率/速率分配
+- 输出 QoS、拓扑、流量和资源分配结果
 
-## 📊 输出文件说明 (Output Files)
-
-仿真结果保存在 `output/` 目录下（或通过 `SetOutputDir` 指定的目录）。
-
-### 1. node-transmissions.csv
-记录每次传输层事件（TCP/UDP包的发送与接收）。
-
-| 字段名 | 说明 |
-|--------|------|
-| time_s | 事件发生时间（秒） |
-| nodeId | 节点ID |
-| eventType | 事件类型（Tx Data/Rx Data/Tx Ack/Rx Ack） |
-
-### 2. topology-changes.txt
-记录网络拓扑的动态变化（每5秒汇总一次活跃链路）。
-```text
-0-5s: Node0-Node5, Node1-Node8
-5-10s: Node2-Node7, Node12-Node19
-```
-
-### 3. node-positions.csv
-记录节点的三维轨迹（默认1秒间隔）。
-
-| 字段名 | 说明 |
-|--------|------|
-| time_s | 记录时间 |
-| nodeId | 节点ID |
-| x, y, z | 三维坐标（米） |
-
-### 4. flow-stats.csv
-端到端业务流的统计指标。
-
-| 字段名 | 说明 |
-|--------|------|
-| FlowId | 流ID |
-| Src/DestAddr | 源/目的IP |
-| PacketLossRate | 丢包率 (%) |
-| Throughput | 吞吐量 (bps) |
-| DelaySum | 总时延 (s) |
-
----
-
-## 🔧 配置参数 (Configuration)
-
-可以通过 `sim.SetParam("plugin.param", value)` 调整参数。
-
-### 移动性参数 (mobility.*)
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
-| `trajectory_file` | RTK轨迹文件路径 | - |
-| `noise_stddev` | GPS噪声标准差 (m) | 0.01 (Easy) / 0.2 (Hard) |
-| `enable_drift` | 是否启用漂移 | false / true |
-| `formation` | 编队形状 | "v", "line", "triangle" |
-
-### 信道参数 (channel.*)
-| 参数 | 说明 |
-|------|------|
-| `tx_power` | 发射功率 (dBm), 默认 33.0 |
-| `rx_sensitivity`| 接收灵敏度 (dBm), 默认 -93.0 |
-| `interference_nodes` | 人为干扰节点数量 |
-
-### 业务参数 (traffic.*)
-| 参数 | 说明 |
-|------|------|
-| `trigger_prob` | 通信触发概率 (0.0-1.0) |
-| `near_distance` | 近距离通信阈值 (m) |
-| `max_distance` | 最大通信距离 (m) |
-
----
-
-## 🚀 快速开始 (Quick Start)
+常用命令：
 
 ```bash
-# 1. 配置
-./ns3 configure --enable-examples
-
-# 2. 编译
-./ns3 build
-
-# 3. 运行简单示例（指定场景和难度）
-./ns3 run "uav-sim-simple-example --scenario=reconnaissance --difficulty=moderate"
-
-# 4. 运行基准测试
-./ns3 run "uav-sim-benchmark-example"
+./ns3 build uav_resource_allocation
+./run_uav_simulation.sh
+./run_uav_simulation.sh graph_coloring 15 3 200
+./ns3 run "uav_resource_allocation --formation=v_formation --difficulty=Easy --strategy=dynamic --duration=200"
+python3 analyze_resource_allocation.py output/<result_dir> --all
+python3 visualize_results.py output/<result_dir>
 ```
+
+### 2. RTK Benchmark 主线
+
+入口文件：
+
+- `scratch/rtk_benchmark.cc`
+- `run_benchmark.sh`
+- `analyze_benchmark.py`
+- `BENCHMARK_QUICK_REF.md`
+
+用途：
+
+- 运行 `cross`、`line`、`triangle`、`v_formation` 四种编队
+- 运行 `Easy`、`Moderate`、`Hard` 三种难度
+- 输出 benchmark 数据集并汇总分析
+
+常用命令：
+
+```bash
+./ns3 build rtk_benchmark
+./ns3 run "rtk_benchmark --formation=cross --difficulty=easy"
+bash run_benchmark.sh
+python3 analyze_benchmark.py
+```
+
+### 3. RTK 预处理与可视化
+
+入口文件：
+
+- `rtk/preprocess.py`
+- `rtk/generate_ns3_traces.py`
+- `rtk/run_pipeline.py`
+- `rtk/README.md`
+- `rtk/VISUALIZATION_README.md`
+- `visualization/README.md`
+
+用途：
+
+- RTK 数据预处理
+- ns-3 轨迹文件生成
+- RTK 与仿真数据对齐
+- 轨迹和拓扑动画生成
+
+示例命令：
+
+```bash
+python3 rtk/run_pipeline.py
+python3 visualization/plot_rtk_gif.py data_rtk/mobility_trace_cross.txt -o visualization/output/rtk_animation.gif
+```
+
+### 4. 前后端数字孪生演示
+
+入口文件：
+
+- `api_server/app.py`
+- `rtk/advanced_path_planner.py`
+- `osm_to_simulation.py`
+- `FRONTEND_API_INTEGRATION_GUIDE.md`
+
+后端流程：
+
+1. 前端提交编队、规模、起终点、难度、策略、建筑物信息
+2. 后端生成地图文件
+3. 调用 `rtk/advanced_path_planner.py` 生成轨迹
+4. 调用 `uav_resource_allocation` 运行 ns-3
+5. 调用 `analyze_resource_allocation.py` 生成结果
+6. API 返回位置、拓扑、QoS 和资源分配数据
+
+启动命令：
+
+```bash
+python3 api_server/app.py
+```
+
+默认监听：
+
+```text
+http://0.0.0.0:5000
+```
+
+## 辅助材料
+
+根目录之外还保留了 3 类低耦合资料，避免继续堆在顶层：
+
+- `tools/`
+  例如 `plot_trajectory.py`、`inspect_osm.py`、`build_city_scenario.py`、`compare_algorithms.py`
+- `samples/`
+  例如历史 `flowmon.xml`、`flow-stats.csv`、`topology-changes.txt`、配置样例和零散测试文件
+- `notes/`
+  例如原型页面、中文说明文档、PDF 材料
+
+## 输出文件
+
+`uav_resource_allocation` 常见输出：
+
+- `rtk-node-positions.csv`
+- `rtk-node-transmissions.csv`
+- `rtk-topology-changes.txt`
+- `rtk-flow-stats.csv`
+- `resource_allocation.csv`
+- `resource_allocation_detailed.csv`
+- `qos_performance.csv`
+- `topology_evolution.csv`
+- `topology_detailed.csv`
+
+`rtk_benchmark` 常见输出：
+
+- `benchmark-config.txt`
+- `flow-stats.csv`
+- `node-positions.csv`
+- `topology-changes.txt`
+
+## 推荐阅读顺序
+
+如果你是第一次接手这个仓库，建议按下面顺序看：
+
+1. 本文件
+2. `BENCHMARK_QUICK_REF.md`
+3. `FRONTEND_API_INTEGRATION_GUIDE.md`
+4. `rtk/README.md`
+5. `visualization/README.md`
+6. `benchmark/README_METRICS.md`
+
+## 说明
+
+这个仓库仍然保留了完整的 `ns-3.43` 源码，因此体积较大。自定义功能主要集中在 `scratch/`、`rtk/`、`visualization/`、`api_server/`、`benchmark/`、`data_rtk/` 和 `data_map/`。

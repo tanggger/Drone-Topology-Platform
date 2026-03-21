@@ -190,5 +190,4 @@ plt.savefig('throughput_dist.png')
 
 ---
 
-**提示**: 详细文档请参考 `BENCHMARK_README.md`
-
+**提示**: 详细说明请参考根目录 `README.md`、`benchmark/README_METRICS.md` 和 `benchmark/TECHNICAL_PARAMETERS_GUIDE.md`
