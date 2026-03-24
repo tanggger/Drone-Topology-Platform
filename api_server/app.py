@@ -42,6 +42,18 @@ NON_COOPERATIVE_CSV_FILES = {
     "key_node_candidates": "key_node_candidates.csv",
 }
 
+NON_COOPERATIVE_ATTACK_JSON_FILES = {
+    "plan": "noncooperative_attack_plan.json",
+    "summary": "noncooperative_pre_post_comparison.json",
+}
+
+NON_COOPERATIVE_ATTACK_CSV_FILES = {
+    "recommendations": "noncooperative_attack_recommendations.csv",
+    "events": "noncooperative_attack_events.csv",
+    "target_binding": "noncooperative_target_binding.csv",
+    "effect_metrics": "noncooperative_attack_effect_metrics.csv",
+}
+
 SHARED_DATASET_FILES = {
     "positions": "rtk-node-positions.csv",
     "transmissions": "rtk-node-transmissions.csv",
@@ -246,16 +258,40 @@ def load_cooperative_results(out_dir):
     return data
 
 def load_non_cooperative_results(out_dir):
-    data = {}
+    observation_inference = {}
     for key, filename in NON_COOPERATIVE_CSV_FILES.items():
         content = safe_read_csv(os.path.join(out_dir, filename))
         if content is not None:
-            data[key] = content
+            observation_inference[key] = content
+
+    attack = {}
+    for key, filename in NON_COOPERATIVE_ATTACK_JSON_FILES.items():
+        content = safe_read_json(os.path.join(out_dir, filename))
+        if content is not None:
+            attack[key] = content
+    for key, filename in NON_COOPERATIVE_ATTACK_CSV_FILES.items():
+        content = safe_read_csv(os.path.join(out_dir, filename))
+        if content is not None:
+            attack[key] = content
+
+    data = {}
+    if observation_inference:
+        data["observation_inference"] = observation_inference
+        data.update(observation_inference)
+    if attack:
+        data["attack"] = attack
+        data["attack_datasets"] = sorted(attack.keys())
     return data
 
 def build_results_manifest(task_id, out_dir, shared_results, cooperative_results, non_cooperative_results):
     environment_summary = shared_results.get("environment_summary", {}) or {}
     operation_mode = environment_summary.get("operationMode") or "unknown"
+    attack_results = (
+        non_cooperative_results.get("attack", {})
+        if isinstance(non_cooperative_results, dict)
+        else {}
+    )
+    attack_plan = attack_results.get("plan", {}) if isinstance(attack_results, dict) else {}
     manifest = {
         "taskId": task_id,
         "outputDir": os.path.relpath(out_dir, NS3_DIR),
@@ -267,6 +303,11 @@ def build_results_manifest(task_id, out_dir, shared_results, cooperative_results
         "sharedDatasets": sorted(shared_results.keys()),
         "cooperativeDatasets": sorted(cooperative_results.keys()),
         "nonCooperativeDatasets": sorted(non_cooperative_results.keys()),
+        "nonCooperativeAttackDatasets": sorted(attack_results.keys()) if attack_results else [],
+        "hasNonCooperativeAttack": bool(attack_results),
+        "attackType": attack_plan.get("attackType"),
+        "attackExecuted": attack_plan.get("executedEntityNodeId", -1) is not None
+        and attack_plan.get("executedEntityNodeId", -1) >= 0,
         "availableFiles": sorted(os.listdir(out_dir)) if os.path.isdir(out_dir) else [],
     }
     return sanitize(manifest)
@@ -296,6 +337,13 @@ def load_all_results(task_id):
     )
 
     environment_summary = shared_results.get("environment_summary", {}) or {}
+    non_cooperative_frontend = None
+    if non_cooperative_results:
+        non_cooperative_frontend = {
+            "observation_inference": non_cooperative_results.get("observation_inference", {}),
+            "attack": non_cooperative_results.get("attack"),
+        }
+
     frontend_payload = {
         "meta": {
             "taskId": task_id,
@@ -322,7 +370,7 @@ def load_all_results(task_id):
             if key in shared_results
         },
         "cooperative": cooperative_results or None,
-        "non_cooperative": non_cooperative_results or None,
+        "non_cooperative": non_cooperative_frontend,
         "manifest": manifest,
     }
 
@@ -380,6 +428,12 @@ def run_simulation_task(task_id, config):
         allow_relay_reselection = parse_bool(config.get("allowRelayReselection"), True)
         allow_slot_reallocation = parse_bool(config.get("allowSlotReallocation"), True)
         allow_route_rebuild = parse_bool(config.get("allowRouteRebuild"), True)
+        enable_non_cooperative_attack = parse_bool(config.get("enableNonCooperativeAttack"), False)
+        attack_type = config.get("attackType", "node_strike")
+        manual_strike_target = int(config.get("manualStrikeTarget", -1))
+        attack_execute_time = float(config.get("attackExecuteTime", -1.0))
+        attack_evaluation_duration = float(config.get("attackEvaluationDuration", 12.0))
+        attack_neighborhood_hop = int(config.get("attackNeighborhoodHop", 1))
 
         # Custom 参数提取
         custom_params = {}
@@ -435,6 +489,12 @@ def run_simulation_task(task_id, config):
             "allowRelayReselection": allow_relay_reselection,
             "allowSlotReallocation": allow_slot_reallocation,
             "allowRouteRebuild": allow_route_rebuild,
+            "enableNonCooperativeAttack": enable_non_cooperative_attack,
+            "attackType": attack_type,
+            "manualStrikeTarget": manual_strike_target,
+            "attackExecuteTime": attack_execute_time,
+            "attackEvaluationDuration": attack_evaluation_duration,
+            "attackNeighborhoodHop": attack_neighborhood_hop,
             "custom_params": custom_params  # 将 Custom 参数加入哈希计算
         }
         param_str = json.dumps(hash_params, sort_keys=True)
@@ -531,6 +591,15 @@ def run_simulation_task(task_id, config):
                 f"--allowRelayReselection={'true' if allow_relay_reselection else 'false'}",
                 f"--allowSlotReallocation={'true' if allow_slot_reallocation else 'false'}",
                 f"--allowRouteRebuild={'true' if allow_route_rebuild else 'false'}",
+            ])
+        elif operation_mode == "non_cooperative":
+            ns3_arg_tokens.extend([
+                f"--enableNonCooperativeAttack={'true' if enable_non_cooperative_attack else 'false'}",
+                f"--attackType={attack_type}",
+                f"--manualStrikeTarget={manual_strike_target}",
+                f"--attackExecuteTime={attack_execute_time}",
+                f"--attackEvaluationDuration={attack_evaluation_duration}",
+                f"--attackNeighborhoodHop={attack_neighborhood_hop}",
             ])
 
         ns3_args = build_ns3_arg_string(ns3_arg_tokens)
