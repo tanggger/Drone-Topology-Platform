@@ -1,200 +1,1062 @@
-# 🚀 Wing-Net Omni 数字孪生平台：前后端 API 联调与对接指南
+# Wing-Net Omni 前端接口对接指南
 
-本文档专为**前端开发人员（或前端 AI 助手）**编写。
-后端系统（基于高频物理引擎 NS-3 和动态图着色算法）已经通过 Flask 封装为标准的 RESTful API。这里包含了从启动推演、获取计算结果到前端 3D 渲染对接的所有必备知识和代码示例。
+本文档面向前端开发人员，覆盖当前后端已经完成的能力、可直接接入的接口、推荐的数据读取方式，以及合作/非合作两类工作区的数据映射关系。
 
----
+当前结论只有一句：
 
-## 1. 架构概述
+- 可以先启动前端搭建与联调
+- 可以先跑合作模式和非合作观测/推断效果
+- 非合作“基于推断结果再去做打击/压制/节点破坏”可以后置，不影响当前前端主工作区搭建
 
-整个平台的交互采用**异步轮询任务机制**，原因在于后端的 NS-3 C++ 核心执行完整的无人机集群电磁对抗仿真需要耗费一定的计算时间（通常在 10秒 ~ 1分钟之间，取决于集群规模 `num_drones`）。
+## 1. 当前后端能力边界
 
-*   **API 基准地址**: `http://<后端机器IP或localhost>:5000`
-*   **通信数据格式**: `application/json`
-*   **CORS 跨域**: 后端已全量开启 CORS，前端可直接在任何端口/域名下发起本地 AJAX/Fetch 请求。
+当前后端已经具备：
 
----
+- 多场景环境层
+  - `urban`
+  - `forest`
+  - `lake`
+  - `open-field`
+- 合作模式
+  - `centralized`
+  - `distributed`
+  - `hybrid`
+- 合作模式完整输出
+  - 模式摘要
+  - 故障事件时间线
+  - 恢复动作时间线
+  - 恢复指标时间序列
+  - 仪表盘快照
+- 非合作模式当前完成到
+  - 观测事件
+  - 窗口化观测
+  - 边证据
+  - 推断边
+  - 图节点
+  - 关键节点候选
 
-## 2. API 接口文档
+当前后端还没有作为正式前端能力交付的内容：
 
-### 2.1 健康检查 (Health Check)
-用于检测后端服务器是否存活。
-*   **Method:** `GET`
-*   **Endpoint:** `/api/health`
-*   **Response (200 OK):**
-    ```json
-    {
-      "status": "OK",
-      "message": "Wing-Net Omni Backend Server is running."
-    }
-    ```
+- 非合作模式下基于推断结果的正式“打击/压制/节点破坏”工作流接口
+- 非合作打击后的专属效果评估 API 结果面板
 
-### 2.2 发起仿真推演任务 (Trigger Simulation)
-向后端提交大屏上配置好的各项参数，触发底层物理沙盘引擎。
-*   **Method:** `POST`
-*   **Endpoint:** `/api/simulate`
-*   **Request Body:**
-    ```json
-    {
-      "num_drones": 30,                 // 飞机数量
-      "formation": "v_formation",       // 编队类型: v_formation, line, cross, triangle, custom
-      "difficulty": "Hard",             // 干扰与地理难度: Easy, Moderate, Hard
-      "strategy": "dynamic",            // AI策略: static (基线), dynamic (图着色自适应)
-      "start": "0,0,30",                // 群体默认起飞点坐标 (x,y,z)
-      "target": "0,600,30",             // 群体默认目标点坐标 (x,y,z)
-      "buildings": [                    // 前端交互时框选生成的城市大楼阻隔物
-        {
-          "xMin": 50, "xMax": 90, 
-          "yMin": 200, "yMax": 240, 
-          "zMin": 0, "zMax": 300
-        }
-      ]
-    }
-    ```
-*   **Response (200 OK):**
-    ```json
-    {
-      "message": "Simulation triggered successfully",
-      "task_id": "a1b2c3d4",            // ⭐️ 重要：拿到这个排队号，用于轮询结果
-      "status": "RUNNING"
-    }
-    ```
+因此前端当前应分两条线推进：
 
-### 2.3 轮询获取任务结果 (Poll Results)
-前端携带上一步拿到的 `task_id`，每隔一定时间（建议 3~5 秒）来叩门询问。
-*   **Method:** `GET`
-*   **Endpoint:** `/api/results/<task_id>`
-*   **Response:**
-    **A. 如果还在算力推演中：**
-    ```json
-    { "status": "RUNNING" }
-    ```
-    **B. 如果计算失败（炸机了）：**
-    ```json
-    { "status": "FAILED", "error": "具体的 Python 或 C++ 报错堆栈" }
-    ```
-    **C. 如果计算成功出结果（大满贯）：**
-    ```json
-    {
-      "status": "SUCCESS",
-      "data": {
-        // [动画驱动层] 实时位置（含RTK抖动与避障机动绕飞点位）
-        "positions": [
-          {"time": 0.0, "nodeId": 0, "x": 0.0, "y": 0.0, "z": 30.0},
-          ...
-        ],
-        // [动画驱动层] 通信激光特效 (采样数据)
-        "transmissions": [
-          {"time": 1.25, "nodeId": 3, "eventType": "Tx Data"},
-          ...
-        ],
-        // [动画驱动层] 实时组网连线状态 (每2秒更新一次快照)
-        "topology_links": [
-          "0.0-2.0s: Node0-Node1, Node0-Node2, Node4-Node5",
-          ...
-        ],
-        // [指标层] 拓扑与连通性概览演化
-        "topology_evolution": [
-          {"time": 0.0, "num_links": 435, "connectivity": 1.0},
-          ...
-        ],
-        // [指标层] 最终结算面板汇总统计
-        "flow_summary": [
-          {"FlowId": 1, "Src": 0, "Dest": 7, "Tx": 100, "Rx": 95, "LossRate": "5.0%"},
-          ...
-        ],
-        // [指标层] PDR（包到达率）/ 时延 / 吞吐量性能演进
-        "qos": [
-          {"time": 0.0, "uav0_pdr": 0.99, "uav0_delay": 0.012, "uav0_throughput": 4500.5},
-          ...
-        ]
-      }
-    }
-    ```
+1. 合作模式工作区直接按完整工作流接入
+2. 非合作模式工作区先做到“观测 -> 推断 -> 关键节点识别”展示
 
----
+## 2. 接口总览
 
-## 3. 标准的前端 Axios 对接代码范例
+基准地址：
 
-你可以直接把以下代码放进前端的大屏 `[开始推演]` 按钮的 onClick 方法中：
-
-```javascript
-import axios from 'axios';
-
-// 假设我们后端的IP目前是本地
-const BASE_URL = 'http://localhost:5000';
-
-async function runTwinSimulation(uiConfig) {
-  try {
-    console.log("1. 提交推演参数...");
-    // 1. 发射配置给后端
-    const response = await axios.post(`${BASE_URL}/api/simulate`, uiConfig);
-    const taskId = response.data.task_id;
-    console.log(`仿真已在云端启动，任务通道舱 ID: ${taskId}`);
-    
-    // 2. 开始轮询结果，每隔 5 秒查一次
-    console.log("2. 正在等待 NS-3 集群算力执行...");
-    const timer = setInterval(async () => {
-      const resultRes = await axios.get(`${BASE_URL}/api/results/${taskId}`);
-      const status = resultRes.data.status;
-
-      if (status === 'SUCCESS') {
-        clearInterval(timer); // 停止轮询
-        console.log("3. 🎉 数据结算完成！获取推演引擎返回的高研级大礼包！");
-        
-        const engineData = resultRes.data.data;
-        
-        // ---- ✨ 交给 3D 和 Three.js / ECharts 的驱动渲染时刻 ✨ ----
-        
-        // (1) 把它交给 Three.js 驱动 3D 飞机模型按照时间线飞
-        const positions = engineData.positions; 
-        
-        // (2) 渲染 3D 连线快照 (解析 "Node0-Node1" 字符串并在两机间连线)
-        const linksSnapshot = engineData.topology_links;
-        
-        // (3) 触发通信激光动画
-        const lasers = engineData.transmissions; 
-        
-        // (4) 把它交给右侧 ECharts 渲染连通率图表
-        const topology = engineData.topology_evolution;
-        
-        // (5) 把它交给底部 PDR 雷达/折线图
-        const qos = engineData.qos;
-        
-        // (6) 仿真结束后的总结算面板
-        const summary = engineData.flow_summary;
-
-      } else if (status === 'FAILED') {
-        clearInterval(timer);
-        console.error("❌ 后端引擎推演崩溃了：", resultRes.data.error);
-        alert("服务器推演发生故障，请检查控制台堆栈。");
-      } else {
-        console.log("   (后端算力引擎正在轰鸣中...请稍候)");
-      }
-    }, 5000);
-
-  } catch (error) {
-    console.error("请求后端 API 失败，是不是服务器没启动？", error);
-  }
-}
-
-// 执行样例
-// runTwinSimulation({
-//    num_drones: 30, formation: "v_formation", difficulty: "Hard", strategy: "dynamic", buildings: []
-// });
+```text
+http://<backend-host>:5000
 ```
 
----
+后端已开启 CORS。
 
-## 4. ⚠️ 前端开发对接避坑指南（重大提示）
+当前推荐前端使用的接口：
 
-1. **坐标系对齐问题**：
-   * 后端 NS-3 使用的是标准 **右手笛卡尔绝对物理坐标系 (米, meter)**。
-   * 如果前端大屏使用的是地图级别坐标（如 Cesium 的经纬度 Long/Lat），前端需要在拿到 `data.positions` 的 `x, y, z` 以后，**自行写一个坐标系转换矩阵（Offset/Scale）**，把后端的局部网格坐标（如 `x=500, y=600`）映射到北京海淀或深圳南山的真实经纬度上。
-2. **时间轴同步**：
-   * 后端吐出的是离散事件散点，`time` 字段是以 `0.5秒` 甚至更小为刻度的。
-   * 引擎并不提供逐帧如 60FPS 的细腻补间，请前端 3D 开发人员在拿到每一秒的 Keyframe（关键帧航点）后，**利用 Three.js / GOSAP 的插值动画 (Interpolation/Tween)**，完成两点之间极其丝滑的平移和过渡。
-3. **响应等待与前端交互**：
-   * 必须在 UI 界面给用户做一个**超大且酷炫的 Loading 动效**（比如：“正在连接高算力集群...物理建模引擎初始化中...”），因为 50 架飞机在 Hard 加上复杂障碍物的算力开销很容易让人以为网页卡死了。
-4. **数据的列名 (Keys)**：
-   * QoS 数组中，如果前端传入的是 30 架飞机，这里面的 key 就是 `uav0_pdr`, `uav1_pdr` ... 一直编排到 `uav29_pdr`。请务必使用动态的 `Object.keys()` 循环来提取图表数据，而不要硬编码写死变量名！
+- `GET /api/health`
+- `POST /api/simulate`
+- `GET /api/results/<task_id>/frontend`
+- `GET /api/results/<task_id>/manifest`
+- `GET /api/maps`
+- `GET /api/map_data/<map_name>`
+- `POST /api/upload_osm`
+
+兼容旧接口：
+
+- `GET /api/results/<task_id>`
+
+说明：
+
+- 新前端优先使用 `/api/results/<task_id>/frontend`
+- `/api/results/<task_id>` 保留，用于兼容老前端和调试
+
+## 3. 健康检查
+
+### 3.1 请求
+
+```http
+GET /api/health
+```
+
+### 3.2 响应
+
+```json
+{
+  "status": "OK",
+  "message": "Wing-Net Omni Backend Server is running."
+}
+```
+
+## 4. 发起仿真任务
+
+### 4.1 请求
+
+```http
+POST /api/simulate
+Content-Type: application/json
+```
+
+### 4.2 前端推荐请求体
+
+```json
+{
+  "operationMode": "cooperative",
+  "communicationMode": "hybrid",
+  "sceneType": "urban",
+  "difficulty": "Moderate",
+  "formation": "v_formation",
+  "strategy": "dynamic",
+  "num_drones": 15,
+  "formation_spacing": 12.0,
+  "start": "0,0,30",
+  "target": "0,600,30",
+  "map_name": "map_test",
+
+  "leaderNodeId": 0,
+  "backupLeaderList": "2,3,4",
+  "distributedHopLimit": 1,
+
+  "cooperativeFailureType": "node_failure",
+  "failureTargetId": 7,
+  "failureStartTime": 80.0,
+  "failureDuration": 40.0,
+
+  "recoveryPolicy": "global_recovery",
+  "recoveryObjective": "connectivity",
+  "recoveryCooldown": 1.0,
+
+  "allowChannelReallocation": true,
+  "allowPowerAdjustment": true,
+  "allowRateAdjustment": true,
+  "allowRelayReselection": true,
+  "allowSlotReallocation": true,
+  "allowRouteRebuild": true,
+
+  "buildings": [],
+
+  "pathLossExp": 2.8,
+  "rxSens": -90.0,
+  "txPower": 23.0,
+  "nakagamiM": 0.0,
+  "macRetries": 7,
+  "noiseFigure": 7.0,
+  "rtkNoise": 0.01,
+  "rtkDriftMag": 0.0,
+  "rtkDriftInt": 0.0,
+  "rtkDriftDur": 0.0,
+  "trafficLoad": 0.2,
+  "numInterfere": 0,
+  "interfereRate": 0.5,
+  "interfereDuty": 0.1
+}
+```
+
+### 4.3 请求字段说明
+
+#### 4.3.1 通用字段
+
+- `operationMode`
+  - `cooperative`
+  - `non_cooperative`
+- `sceneType`
+  - `urban`
+  - `forest`
+  - `lake`
+  - `open-field`
+- `difficulty`
+  - `Easy`
+  - `Moderate`
+  - `Hard`
+  - `Custom`
+- `formation`
+  - `v_formation`
+  - `line`
+  - `cross`
+  - `triangle`
+- `strategy`
+  - `dynamic`
+  - `static`
+- `num_drones`
+- `formation_spacing`
+- `start`
+- `target`
+- `map_name`
+  - 对应后端已导入地图名称
+- `map_file` 或 `mapFile`
+  - 可选，允许显式传相对路径或绝对路径
+- `buildings`
+  - 当前没有选地图时可直接传前端编辑器生成的建筑盒体
+
+#### 4.3.2 合作模式字段
+
+- `communicationMode`
+  - `centralized`
+  - `distributed`
+  - `hybrid`
+- `leaderNodeId`
+- `backupLeaderList`
+  - 逗号分隔字符串，例如 `"2,3,4"`
+- `distributedHopLimit`
+  - `1` 或 `2`
+- `cooperativeFailureType`
+  - `node_failure`
+  - `environment_degradation`
+  - `external_interference`
+  - `link_degradation`
+- `failureTargetId`
+- `failureStartTime`
+- `failureDuration`
+- `recoveryPolicy`
+  - `global_recovery`
+  - `local_recovery`
+- `recoveryObjective`
+  - `connectivity`
+  - `delay`
+  - `throughput`
+  - `pdr`
+- `recoveryCooldown`
+- 动作开关：
+  - `allowChannelReallocation`
+  - `allowPowerAdjustment`
+  - `allowRateAdjustment`
+  - `allowRelayReselection`
+  - `allowSlotReallocation`
+  - `allowRouteRebuild`
+
+#### 4.3.3 Custom 难度字段
+
+只有当 `difficulty = Custom` 时，以下字段才会生效：
+
+- `pathLossExp`
+- `rxSens`
+- `txPower`
+- `nakagamiM`
+- `macRetries`
+- `noiseFigure`
+- `rtkNoise`
+- `rtkDriftMag`
+- `rtkDriftInt`
+- `rtkDriftDur`
+- `trafficLoad`
+- `numInterfere`
+- `interfereRate`
+- `interfereDuty`
+
+### 4.4 响应
+
+```json
+{
+  "message": "Simulation triggered successfully",
+  "task_id": "a1b2c3d4",
+  "status": "RUNNING"
+}
+```
+
+## 5. 轮询策略
+
+前端推荐轮询：
+
+- 第一次提交后等待 `2s`
+- 之后每 `3s ~ 5s` 轮询一次
+
+轮询优先接口：
+
+```text
+GET /api/results/<task_id>/frontend
+```
+
+状态返回：
+
+- `RUNNING`
+- `FAILED`
+- `SUCCESS`
+
+## 6. 结果接口
+
+## 6.1 前端主接口
+
+### 6.1.1 请求
+
+```http
+GET /api/results/<task_id>/frontend
+```
+
+### 6.1.2 响应结构
+
+```json
+{
+  "status": "SUCCESS",
+  "data": {
+    "meta": {
+      "taskId": "a1b2c3d4",
+      "operationMode": "cooperative",
+      "sceneType": "urban",
+      "difficulty": "Moderate",
+      "communicationMode": "hybrid",
+      "formation": "v_formation"
+    },
+    "shared": {
+      "environment_summary": {},
+      "request_metadata": {},
+      "positions": [],
+      "transmissions": [],
+      "topology_links": [],
+      "topology_evolution": [],
+      "topology_detailed": [],
+      "resource_detailed": [],
+      "qos": [],
+      "flow_summary": []
+    },
+    "cooperative": {},
+    "non_cooperative": {},
+    "manifest": {}
+  }
+}
+```
+
+说明：
+
+- `shared` 是所有模式共享的数据层
+- `cooperative` 只有在合作模式下才有值
+- `non_cooperative` 只有在非合作模式下才有值
+- `manifest` 用于判断当前有哪些数据集已经存在
+
+## 6.2 Manifest 接口
+
+### 6.2.1 请求
+
+```http
+GET /api/results/<task_id>/manifest
+```
+
+### 6.2.2 用途
+
+用于前端在进入工作区前先判断：
+
+- 当前任务属于哪种模式
+- 当前场景是什么
+- 当前有哪些结果文件已经可用
+- 该走合作工作区还是非合作工作区
+
+### 6.2.3 响应结构
+
+```json
+{
+  "status": "SUCCESS",
+  "data": {
+    "taskId": "a1b2c3d4",
+    "outputDir": "output/run_a1b2c3d4",
+    "operationMode": "cooperative",
+    "sceneType": "urban",
+    "difficulty": "Moderate",
+    "communicationMode": "hybrid",
+    "formation": "v_formation",
+    "sharedDatasets": ["positions", "qos", "environment_summary"],
+    "cooperativeDatasets": ["mode_summary", "dashboard_snapshot"],
+    "nonCooperativeDatasets": [],
+    "availableFiles": []
+  }
+}
+```
+
+## 6.3 兼容结果接口
+
+### 6.3.1 请求
+
+```http
+GET /api/results/<task_id>
+```
+
+### 6.3.2 说明
+
+该接口保留旧结构，并在 `data` 里增加了：
+
+- `environment_summary`
+- `request_metadata`
+- `frontend_manifest`
+- `cooperative`
+- `non_cooperative`
+- `frontend`
+
+旧前端仍可继续读取：
+
+- `positions`
+- `qos`
+- `topology_evolution`
+- `transmissions`
+- `topology_links`
+- `flow_summary`
+- `resource_detailed`
+- `topology_detailed`
+
+## 7. shared 数据层
+
+这些数据无论合作还是非合作都可以直接接。
+
+### 7.1 `shared.environment_summary`
+
+文件来源：
+
+- `environment_summary.json`
+
+主要字段：
+
+- `operationMode`
+- `sceneType`
+- `difficulty`
+- `baseModel`
+- `environmentSource`
+- `geometryInputMode`
+- `effectiveModelSummary`
+- `hasBuildings`
+- `hasVegetation`
+- `hasWaterSurface`
+- `reflectionAware`
+- `interferenceFactor`
+- `connectivityRangeFactor`
+- `pathLossExponent`
+- 合作模式下还会包含：
+  - `communicationMode`
+  - `leaderNodeId`
+  - `cooperativeFailureType`
+  - `failureTargetId`
+  - `recoveryPolicy`
+  - `recoveryObjective`
+
+前端用途：
+
+- 顶部状态栏
+- 左侧环境信息卡
+- 工作区入口页模式判断
+
+### 7.2 `shared.positions`
+
+文件来源：
+
+- `rtk-node-positions.csv`
+- 后端已自动合并 `resource_allocation_detailed.csv` 中的部分资源信息
+
+常用字段：
+
+- `time`
+- `nodeId`
+- `x`
+- `y`
+- `z`
+- `node_type`
+- `speed`
+- 可能存在合并字段：
+  - `power`
+  - `channel`
+  - `data_rate`
+  - `neighbors`
+  - `interference`
+  - `sinr`
+
+前端用途：
+
+- 3D 沙盘位置回放
+- 单机详情
+- 节点状态着色
+
+### 7.3 `shared.transmissions`
+
+文件来源：
+
+- `rtk-node-transmissions.csv`
+
+前端用途：
+
+- 激光/通信动画
+- 时间轴上的通信事件提示
+
+### 7.4 `shared.topology_links`
+
+文件来源：
+
+- `rtk-topology-changes.txt`
+
+前端用途：
+
+- 3D 连线回放
+- 拓扑变化动画
+
+### 7.5 `shared.topology_evolution`
+
+文件来源：
+
+- `topology_evolution.csv`
+
+前端用途：
+
+- 连通率曲线
+- 链路数演化曲线
+
+### 7.6 `shared.topology_detailed`
+
+文件来源：
+
+- `topology_detailed.csv`
+
+前端用途：
+
+- 平均度
+- 网络密度
+- 右侧实时网络统计面板
+
+### 7.7 `shared.resource_detailed`
+
+文件来源：
+
+- `resource_allocation_detailed.csv`
+
+前端用途：
+
+- 节点资源详情
+- 受干扰程度
+- 当前信道/功率/速率显示
+
+### 7.8 `shared.qos`
+
+文件来源：
+
+- `qos_performance.csv`
+
+前端用途：
+
+- PDR 曲线
+- 吞吐曲线
+- 时延曲线
+
+### 7.9 `shared.flow_summary`
+
+文件来源：
+
+- `rtk-flow-stats.csv`
+
+前端用途：
+
+- 最终结算面板
+- 流级统计表
+
+## 8. 合作模式工作区接入
+
+### 8.1 数据入口
+
+前端判断：
+
+```ts
+data.meta.operationMode === "cooperative"
+```
+
+之后读取：
+
+- `data.shared.*`
+- `data.cooperative.*`
+
+### 8.2 `cooperative.mode_summary`
+
+文件来源：
+
+- `cooperative_mode_summary.json`
+
+主要字段：
+
+- `operationMode`
+- `communicationMode`
+- `recoveryPolicy`
+- `recoveryObjective`
+- `sceneType`
+- `difficulty`
+- `formation`
+- `leaderNodeId`
+- `backupLeaderList`
+- `distributedHopLimit`
+- `failureType`
+- `failureTargetId`
+- `failureStartTime`
+- `failureDuration`
+- `recoveryCooldown`
+- `actionFlags`
+
+前端用途：
+
+- 左侧模式配置摘要
+- 顶部状态栏
+- 合作模式信息总卡
+
+### 8.3 `cooperative.dashboard_snapshot`
+
+文件来源：
+
+- `cooperative_dashboard_snapshot.json`
+
+主要字段：
+
+- `phase`
+- `operationMode`
+- `communicationMode`
+- `leaderNodeId`
+- `backupLeaderId`
+- `isLeaderAlive`
+- `failureActive`
+- `failureType`
+- `failureTargetId`
+- `responseTimeSec`
+- `recoveryTimeSec`
+- `stabilizationTimeSec`
+- `recoveryStatus`
+- `latestRecoveryAction`
+
+字段语义补充：
+
+- `recoveryStatus` 当前值域为：
+  - `not_triggered`
+  - `active`
+  - `completed`
+  - `stable`
+- `responseTimeSec`、`recoveryTimeSec`、`stabilizationTimeSec` 允许为 `null`
+- 前端不得把 `null` 渲染成 `0`
+  - `null` 表示当前运行尚未形成对应时间结论
+  - `0` 表示真实的零时延结果，两者语义不同
+- `latestRecoveryAction` 对应当前已记录的最后一条恢复动作类型
+
+前端用途：
+
+- 右侧恢复总览卡片
+- 底部状态条
+- 顶部当前阶段徽章
+
+### 8.4 `cooperative.failure_timeline`
+
+文件来源：
+
+- `cooperative_failure_timeline.json`
+
+结构：
+
+- `events[]`
+
+事件字段：
+
+- `time`
+- `failureType`
+- `targetNodeId`
+- `targetRole`
+- `isLeaderTarget`
+- `failureState`
+- `affectedNeighborCount`
+- `affectedLinkCount`
+- `effectSummary`
+- `source`
+
+前端用途：
+
+- 底部事件时间轴
+- 故障事件列表
+- 3D 沙盘故障提示
+
+### 8.5 `cooperative.recovery_timeline`
+
+文件来源：
+
+- `cooperative_recovery_timeline.json`
+
+结构：
+
+- `actions[]`
+
+动作字段：
+
+- `time`
+- `phase`
+- `communicationMode`
+- `recoveryPolicy`
+- `effectiveRecoveryPolicy`
+- `triggerReason`
+- `executorNodeId`
+- `targetNodeIds`
+- `actionType`
+- `oldValue`
+- `newValue`
+- `scope`
+- `expectedEffect`
+- `resultState`
+
+前端用途：
+
+- 恢复动作时间线
+- 恢复步骤列表
+- 单机详情里的“当前是否参与恢复”
+
+### 8.6 `cooperative.metrics_timeseries`
+
+文件来源：
+
+- `cooperative_metrics_timeseries.json`
+
+结构：
+
+- `samples[]`
+
+样本字段：
+
+- `time`
+- `phase`
+- `connectivity`
+- `avgDegree`
+- `pdr`
+- `throughputMbps`
+- `delayMs`
+- `p99DelayMs`
+- `failureNeighborhoodPdr`
+- `failureNeighborhoodThroughputMbps`
+- `failureNeighborhoodDelayMs`
+- `failureNeighborhoodNodeCount`
+- `failureTargetId`
+- `isFailureTargetFailed`
+- `failureTargetPdr`
+- `failureTargetThroughputMbps`
+- `failureTargetDelayMs`
+- `activeNodeCount`
+- `leaderNodeId`
+- `isLeaderAlive`
+- `responseTimeSec`
+- `recoveryTimeSec`
+- `stabilizationTimeSec`
+
+字段语义补充：
+
+- `activeNodeCount`、`leaderNodeId`、`isLeaderAlive` 是逐样本历史值
+- 不要把它们当成最终态字段再回放整条曲线
+- `leaderNodeId` 在 Leader 切换场景下会真实反映：
+  - 故障前 Leader
+  - 故障检测后失活阶段
+  - 备份 Leader 接管后的新值
+- `responseTimeSec`、`recoveryTimeSec`、`stabilizationTimeSec` 允许按样本为 `null`
+- 这些时间字段推荐只在状态卡或光标定位样本上展示，不建议对整条曲线做插值补零
+
+恢复判定口径：
+
+- 恢复完成不是只看全网平均业务指标
+- 当前实现使用：
+  - 全局 `connectivity`
+  - 故障目标邻域业务指标 `PDR / throughput / delay`
+- 若当前不存在有效故障邻域，则回退到全局平均业务指标
+- 满足规则：
+  - 全局 `connectivity` 达标
+  - 且业务三项中至少两项达标
+
+前端可视化建议：
+
+- 原有 `pdr / throughputMbps / delayMs` 继续作为全局平均曲线
+- 需要明确展示故障冲击时，优先画：
+  - `failureNeighborhoodPdr`
+  - `failureNeighborhoodThroughputMbps`
+  - `failureNeighborhoodDelayMs`
+- 需要明确展示“被打掉目标”时，优先画：
+  - `failureTargetPdr`
+  - `failureTargetThroughputMbps`
+  - `failureTargetDelayMs`
+- 这三层曲线建议分组展示：
+  - 全局平均
+  - 故障邻域
+  - 故障目标
+
+前端用途：
+
+- 右侧时序图
+- 连通率恢复曲线
+- PDR / 吞吐 / 时延 / P99 时延图
+- 响应时间 / 恢复时间 / 稳定时间展示
+
+### 8.7 CSV 明细
+
+前端一般不直接首选这些 CSV 明细，但需要时可从 `data.cooperative` 中读取：
+
+- `failure_events`
+- `recovery_actions`
+- `recovery_metrics`
+- `decision_trace`
+
+建议用途：
+
+- 调试抽屉
+- 高级表格
+- 导出按钮
+
+## 9. 非合作模式工作区接入
+
+### 9.1 数据入口
+
+前端判断：
+
+```ts
+data.meta.operationMode === "non_cooperative"
+```
+
+之后读取：
+
+- `data.shared.*`
+- `data.non_cooperative.*`
+
+### 9.2 当前非合作工作区的正式展示边界
+
+当前前端应该正式展示：
+
+1. 观测事件
+2. 窗口化观测
+3. 边证据
+4. 推断边
+5. 图节点
+6. 关键节点候选
+
+当前不应默认承诺已经具备的前端能力：
+
+1. 非合作打击控制面板真实下发
+2. 基于推断结果的正式压制/打击执行结果
+3. 打击前后专属效果评估页
+
+### 9.3 `non_cooperative.observed_signal_events`
+
+文件来源：
+
+- `observed_signal_events.csv`
+
+前端用途：
+
+- 观测事件面板
+- 单节点观测历史
+
+### 9.4 `non_cooperative.observed_comm_windows`
+
+文件来源：
+
+- `observed_comm_windows.csv`
+
+前端用途：
+
+- 当前窗口摘要
+- 中间沙盘“观测到的活动节点”
+
+### 9.5 `non_cooperative.observed_link_evidence`
+
+文件来源：
+
+- `observed_link_evidence.csv`
+
+前端用途：
+
+- 边证据面板
+- 推断前证据层
+
+### 9.6 `non_cooperative.inferred_topology_edges`
+
+文件来源：
+
+- `inferred_topology_edges.csv`
+
+前端用途：
+
+- 中间沙盘推断概率边
+- 右侧推断结果列表
+
+### 9.7 `non_cooperative.inferred_graph_nodes`
+
+文件来源：
+
+- `inferred_graph_nodes.csv`
+
+前端用途：
+
+- 图表示节点信息
+- 节点权重信息展示
+
+### 9.8 `non_cooperative.key_node_candidates`
+
+文件来源：
+
+- `key_node_candidates.csv`
+
+前端用途：
+
+- 关键节点高亮
+- Top-N 关键节点面板
+
+## 10. 地图接口
+
+### 10.1 地图列表
+
+```http
+GET /api/maps
+```
+
+响应：
+
+```json
+{
+  "status": "SUCCESS",
+  "maps": ["map_test", "map_city_a"]
+}
+```
+
+### 10.2 读取建筑渲染数据
+
+```http
+GET /api/map_data/<map_name>
+```
+
+用途：
+
+- 场景入口页地图预览
+- 中间沙盘建筑图层
+
+### 10.3 上传 OSM
+
+```http
+POST /api/upload_osm
+```
+
+前端使用 `multipart/form-data`。
+
+## 11. 前端推荐接线方式
+
+### 11.1 模式入口页
+
+进入任务详情页前，先读：
+
+- `sceneType`
+- `operationMode`
+- `difficulty`
+- `formation`
+
+推荐来源：
+
+- 启动参数表单本地状态
+- 任务完成后由 `manifest` 和 `meta` 校验
+
+### 11.2 合作工作区
+
+推荐读取顺序：
+
+1. `data.meta`
+2. `data.shared.environment_summary`
+3. `data.cooperative.mode_summary`
+4. `data.cooperative.dashboard_snapshot`
+5. `data.shared.positions`
+6. `data.shared.topology_links`
+7. `data.cooperative.metrics_timeseries`
+8. `data.cooperative.failure_timeline`
+9. `data.cooperative.recovery_timeline`
+
+### 11.3 非合作工作区
+
+推荐读取顺序：
+
+1. `data.meta`
+2. `data.shared.environment_summary`
+3. `data.non_cooperative.observed_signal_events`
+4. `data.non_cooperative.observed_comm_windows`
+5. `data.non_cooperative.observed_link_evidence`
+6. `data.non_cooperative.inferred_topology_edges`
+7. `data.non_cooperative.inferred_graph_nodes`
+8. `data.non_cooperative.key_node_candidates`
+
+## 12. Axios 示例
+
+```ts
+import axios from "axios";
+
+const BASE_URL = "http://localhost:5000";
+
+export async function startSimulation(payload: Record<string, unknown>) {
+  const res = await axios.post(`${BASE_URL}/api/simulate`, payload);
+  return res.data;
+}
+
+export async function pollFrontendResults(taskId: string) {
+  const res = await axios.get(`${BASE_URL}/api/results/${taskId}/frontend`);
+  return res.data;
+}
+
+export async function pollManifest(taskId: string) {
+  const res = await axios.get(`${BASE_URL}/api/results/${taskId}/manifest`);
+  return res.data;
+}
+```
+
+轮询示例：
+
+```ts
+async function waitForResult(taskId: string) {
+  while (true) {
+    const res = await pollFrontendResults(taskId);
+    if (res.status === "SUCCESS") return res.data;
+    if (res.status === "FAILED") throw new Error(res.error || "Simulation failed");
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+}
+```
+
+## 13. 前端实现建议
+
+### 13.1 不要把合作和非合作工作区混成一个默认大页
+
+推荐结构：
+
+1. 入口页
+2. 合作工作区
+3. 非合作工作区
+
+### 13.2 统一用 `meta.operationMode` 做页面分流
+
+不要靠某个文件是否存在来猜模式。
+
+### 13.3 前端状态建议拆成两层
+
+- `runMeta`
+  - 任务、模式、场景、难度、编队
+- `workspaceData`
+  - shared
+  - cooperative
+  - nonCooperative
+
+### 13.4 大数组不要无脑全量响应式深拷贝
+
+尤其是：
+
+- `positions`
+- `resource_detailed`
+- `qos`
+- `metrics_timeseries.samples`
+
+建议按当前时间窗口切片或建立索引。
+
+## 14. 当前最适合前端先接的部分
+
+如果要尽快看到界面结果，优先顺序建议是：
+
+1. 先接 `meta + manifest`
+2. 再接 `shared.environment_summary`
+3. 再接 `shared.positions + topology_links`
+4. 合作模式先接 `dashboard_snapshot + metrics_timeseries`
+5. 非合作模式先接 `inferred_topology_edges + key_node_candidates`
+6. 最后补故障时间线、恢复时间线和高级明细表
+
+前端接入注意：
+
+- `dashboard_snapshot.recoveryTimeSec = null` 时，不要显示为 `0s`
+- `metrics_timeseries.samples[*].leaderNodeId` 和 `isLeaderAlive` 应直接用于 Leader 切换时间线
+- 需要展示“恢复完成但未稳定”时，应依据：
+  - `recoveryStatus = completed`
+  - 而不是只看 `phase = recovery`
+
+## 15. 一句话交付边界
+
+当前这套接口已经足够支持你先把前端合作工作区和非合作观测/推断工作区搭起来，并先验证仿真效果。
+
+非合作“基于推断结果的正式打击/压制/节点破坏”可以放到前端效果稳定之后再做，不会卡住现在的前后端联调。

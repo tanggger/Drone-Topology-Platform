@@ -1,0 +1,74 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "feature_type": "water",
+        "scene_type": "lake",
+        "name": "lake_zone_complex",
+        "enabled": true,
+        "water_type": "lake"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [20, 20],
+            [200, 20],
+            [200, 60],
+            [140, 60],
+            [140, 100],
+            [200, 100],
+            [200, 140],
+            [20, 140],
+            [20, 20]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "feature_type": "open_field",
+        "scene_type": "lake",
+        "name": "island_center",
+        "enabled": true
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [60, 60],
+            [100, 60],
+            [100, 100],
+            [60, 100],
+            [60, 60]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "feature_type": "building",
+        "scene_type": "lake",
+        "name": "dock_house",
+        "enabled": true,
+        "height_m": 5
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [20, 80],
+            [40, 80],
+            [40, 90],
+            [20, 90],
+            [20, 80]
+          ]
+        ]
+      }
+    }
+  ]
+}

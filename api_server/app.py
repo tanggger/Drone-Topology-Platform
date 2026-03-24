@@ -10,12 +10,49 @@ from flask_cors import CORS
 import threading
 import math
 import sys
+import shlex
 
 app = Flask(__name__)
 CORS(app) # 允许跨域请求，方便前端独立在另外的端口或服务器上运行访问
 
 # NS-3 的工程根目录 (从当前文件位置动态计算，增强可移植性)
 NS3_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+COOPERATIVE_JSON_FILES = {
+    "mode_summary": "cooperative_mode_summary.json",
+    "failure_timeline": "cooperative_failure_timeline.json",
+    "recovery_timeline": "cooperative_recovery_timeline.json",
+    "metrics_timeseries": "cooperative_metrics_timeseries.json",
+    "dashboard_snapshot": "cooperative_dashboard_snapshot.json",
+}
+
+COOPERATIVE_CSV_FILES = {
+    "failure_events": "cooperative_failure_events.csv",
+    "recovery_actions": "cooperative_recovery_actions.csv",
+    "recovery_metrics": "cooperative_recovery_metrics.csv",
+    "decision_trace": "cooperative_decision_trace.csv",
+}
+
+NON_COOPERATIVE_CSV_FILES = {
+    "observed_signal_events": "observed_signal_events.csv",
+    "observed_comm_windows": "observed_comm_windows.csv",
+    "observed_link_evidence": "observed_link_evidence.csv",
+    "inferred_topology_edges": "inferred_topology_edges.csv",
+    "inferred_graph_nodes": "inferred_graph_nodes.csv",
+    "key_node_candidates": "key_node_candidates.csv",
+}
+
+SHARED_DATASET_FILES = {
+    "positions": "rtk-node-positions.csv",
+    "transmissions": "rtk-node-transmissions.csv",
+    "topology_links": "rtk-topology-changes.txt",
+    "topology_evolution": "topology_evolution.csv",
+    "topology_detailed": "topology_detailed.csv",
+    "qos": "qos_performance.csv",
+    "flow_summary": "rtk-flow-stats.csv",
+    "resource_detailed": "resource_allocation_detailed.csv",
+    "environment_summary": "environment_summary.json",
+}
 
 def sanitize(obj):
     """递归清洗 NaN/Inf → None，确保 JSON 合法"""
@@ -28,6 +65,281 @@ def sanitize(obj):
     if isinstance(obj, list):
         return [sanitize(v) for v in obj]
     return obj
+
+def parse_bool(value, default=False):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return default
+
+def safe_read_json(path, default=None):
+    if not os.path.exists(path):
+        return default
+    with open(path, "r", encoding="utf-8") as f:
+        return sanitize(json.load(f))
+
+def safe_read_csv(path):
+    if not os.path.exists(path):
+        return None
+    return sanitize(pd.read_csv(path).to_dict(orient="records"))
+
+def safe_read_text_lines(path):
+    if not os.path.exists(path):
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        return [line.strip() for line in f.readlines()]
+
+def build_task_request_metadata(task_id, raw_config, derived_config):
+    return {
+        "task_id": task_id,
+        "raw_request": sanitize(raw_config),
+        "derived_config": sanitize(derived_config),
+    }
+
+def write_task_request_metadata(out_dir_abs, task_id, raw_config, derived_config):
+    os.makedirs(out_dir_abs, exist_ok=True)
+    metadata = build_task_request_metadata(task_id, raw_config, derived_config)
+    with open(os.path.join(out_dir_abs, "api_request.json"), "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2, ensure_ascii=False)
+
+def resolve_map_file(task_id, config):
+    map_name = config.get("map_name")
+    explicit_map_file = config.get("map_file") or config.get("mapFile")
+    buildings = config.get("buildings", [])
+
+    if map_name:
+        candidate = os.path.join(NS3_DIR, f"data_map/city_{map_name}.txt")
+        if not os.path.exists(candidate):
+            raise FileNotFoundError(f"Real map file not found: {candidate}")
+        return candidate
+
+    if explicit_map_file:
+        candidate = explicit_map_file
+        if not os.path.isabs(candidate):
+            candidate = os.path.join(NS3_DIR, candidate)
+        if not os.path.exists(candidate):
+            raise FileNotFoundError(f"Configured map file not found: {candidate}")
+        return candidate
+
+    map_file = os.path.join(NS3_DIR, f"data_map/custom_city_{task_id}.txt")
+    os.makedirs(os.path.dirname(map_file), exist_ok=True)
+    with open(map_file, "w", encoding="utf-8") as f:
+        f.write("# xMin xMax yMin yMax zMin zMax\n")
+        for b in buildings:
+            f.write(f"{b['xMin']} {b['xMax']} {b['yMin']} {b['yMax']} {b['zMin']} {b['zMax']}\n")
+    return map_file
+
+def build_ns3_arg_string(base_args):
+    return " ".join(shlex.quote(str(token)) for token in base_args if token not in (None, ""))
+
+def load_shared_results(out_dir, task_id):
+    results_data = {}
+
+    pos_path = os.path.join(out_dir, SHARED_DATASET_FILES["positions"])
+    res_detailed_path = os.path.join(out_dir, SHARED_DATASET_FILES["resource_detailed"])
+
+    if os.path.exists(pos_path):
+        df_pos = pd.read_csv(pos_path)
+
+        if os.path.exists(res_detailed_path):
+            try:
+                df_res = pd.read_csv(res_detailed_path)
+                if "time" in df_res.columns and "time_s" in df_pos.columns:
+                    df_res.rename(columns={"time": "time_s"}, inplace=True)
+                    merge_on_time = "time_s"
+                elif "time" in df_pos.columns:
+                    merge_on_time = "time"
+                else:
+                    merge_on_time = None
+
+                if "node_id" in df_res.columns:
+                    df_res.rename(columns={"node_id": "nodeId"}, inplace=True)
+
+                if merge_on_time and "nodeId" in df_pos.columns and "nodeId" in df_res.columns:
+                    df_pos["time_merge_key"] = df_pos[merge_on_time].round(3)
+                    df_res["time_merge_key"] = df_res[merge_on_time].round(3)
+
+                    if "interference_dBm" in df_res.columns and "interference" not in df_res.columns:
+                        df_res.rename(columns={"interference_dBm": "interference"}, inplace=True)
+
+                    merge_cols = ["time_merge_key", "nodeId", "tx_power", "channel", "data_rate", "neighbors"]
+                    if "interference" in df_res.columns:
+                        merge_cols.append("interference")
+                    if "worst_sinr_dB" in df_res.columns:
+                        merge_cols.append("worst_sinr_dB")
+
+                    merged_df = pd.merge(
+                        df_pos,
+                        df_res[merge_cols],
+                        on=["time_merge_key", "nodeId"],
+                        how="left",
+                    )
+
+                    if "tx_power" in merged_df.columns:
+                        merged_df.rename(columns={"tx_power": "power"}, inplace=True)
+                    if "worst_sinr_dB" in merged_df.columns:
+                        merged_df.rename(columns={"worst_sinr_dB": "sinr"}, inplace=True)
+
+                    if "time_merge_key" in merged_df.columns:
+                        merged_df.drop(columns=["time_merge_key"], inplace=True)
+                    if "time_merge_key" in df_pos.columns:
+                        df_pos.drop(columns=["time_merge_key"], inplace=True)
+                    df_pos = merged_df
+            except Exception as merge_err:
+                print(f"[{task_id}] 资源数据合并失败，忽略: {merge_err}")
+
+        results_data["positions"] = sanitize(df_pos.to_dict(orient="records"))
+
+    topology_evolution = safe_read_csv(os.path.join(out_dir, SHARED_DATASET_FILES["topology_evolution"]))
+    if topology_evolution is not None:
+        results_data["topology_evolution"] = topology_evolution
+
+    qos = safe_read_csv(os.path.join(out_dir, SHARED_DATASET_FILES["qos"]))
+    if qos is not None:
+        results_data["qos"] = qos
+
+    transmissions = safe_read_csv(os.path.join(out_dir, SHARED_DATASET_FILES["transmissions"]))
+    if transmissions is not None:
+        results_data["transmissions"] = transmissions
+
+    topology_links = safe_read_text_lines(os.path.join(out_dir, SHARED_DATASET_FILES["topology_links"]))
+    if topology_links is not None:
+        results_data["topology_links"] = topology_links
+
+    flow_summary = safe_read_csv(os.path.join(out_dir, SHARED_DATASET_FILES["flow_summary"]))
+    if flow_summary is not None:
+        results_data["flow_summary"] = flow_summary
+
+    resource_detailed = safe_read_csv(os.path.join(out_dir, SHARED_DATASET_FILES["resource_detailed"]))
+    if resource_detailed is not None:
+        results_data["resource_detailed"] = resource_detailed
+
+    topology_detailed = safe_read_csv(os.path.join(out_dir, SHARED_DATASET_FILES["topology_detailed"]))
+    if topology_detailed is not None:
+        results_data["topology_detailed"] = topology_detailed
+
+    environment_summary = safe_read_json(os.path.join(out_dir, SHARED_DATASET_FILES["environment_summary"]))
+    if environment_summary is not None:
+        results_data["environment_summary"] = environment_summary
+
+    request_metadata = safe_read_json(os.path.join(out_dir, "api_request.json"))
+    if request_metadata is not None:
+        results_data["request_metadata"] = request_metadata
+
+    return results_data
+
+def load_cooperative_results(out_dir):
+    data = {}
+    for key, filename in COOPERATIVE_JSON_FILES.items():
+        content = safe_read_json(os.path.join(out_dir, filename))
+        if content is not None:
+            data[key] = content
+    for key, filename in COOPERATIVE_CSV_FILES.items():
+        content = safe_read_csv(os.path.join(out_dir, filename))
+        if content is not None:
+            data[key] = content
+    return data
+
+def load_non_cooperative_results(out_dir):
+    data = {}
+    for key, filename in NON_COOPERATIVE_CSV_FILES.items():
+        content = safe_read_csv(os.path.join(out_dir, filename))
+        if content is not None:
+            data[key] = content
+    return data
+
+def build_results_manifest(task_id, out_dir, shared_results, cooperative_results, non_cooperative_results):
+    environment_summary = shared_results.get("environment_summary", {}) or {}
+    operation_mode = environment_summary.get("operationMode") or "unknown"
+    manifest = {
+        "taskId": task_id,
+        "outputDir": os.path.relpath(out_dir, NS3_DIR),
+        "operationMode": operation_mode,
+        "sceneType": environment_summary.get("sceneType"),
+        "difficulty": environment_summary.get("difficulty"),
+        "communicationMode": environment_summary.get("communicationMode"),
+        "formation": environment_summary.get("formationName"),
+        "sharedDatasets": sorted(shared_results.keys()),
+        "cooperativeDatasets": sorted(cooperative_results.keys()),
+        "nonCooperativeDatasets": sorted(non_cooperative_results.keys()),
+        "availableFiles": sorted(os.listdir(out_dir)) if os.path.isdir(out_dir) else [],
+    }
+    return sanitize(manifest)
+
+def load_all_results(task_id):
+    out_dir = os.path.join(NS3_DIR, f"output/run_{task_id}")
+    status_file = os.path.join(out_dir, "status.json")
+
+    if not os.path.exists(status_file):
+        return {"status": "RUNNING"}
+
+    with open(status_file, "r", encoding="utf-8") as f:
+        status_data = json.load(f)
+
+    if status_data.get("status") == "FAILED":
+        return sanitize(status_data)
+
+    shared_results = load_shared_results(out_dir, task_id)
+    cooperative_results = load_cooperative_results(out_dir)
+    non_cooperative_results = load_non_cooperative_results(out_dir)
+    manifest = build_results_manifest(
+        task_id,
+        out_dir,
+        shared_results,
+        cooperative_results,
+        non_cooperative_results,
+    )
+
+    environment_summary = shared_results.get("environment_summary", {}) or {}
+    frontend_payload = {
+        "meta": {
+            "taskId": task_id,
+            "operationMode": environment_summary.get("operationMode"),
+            "sceneType": environment_summary.get("sceneType"),
+            "difficulty": environment_summary.get("difficulty"),
+            "communicationMode": environment_summary.get("communicationMode"),
+            "formation": environment_summary.get("formationName"),
+        },
+        "shared": {
+            key: shared_results.get(key)
+            for key in [
+                "environment_summary",
+                "request_metadata",
+                "positions",
+                "transmissions",
+                "topology_links",
+                "topology_evolution",
+                "topology_detailed",
+                "resource_detailed",
+                "qos",
+                "flow_summary",
+            ]
+            if key in shared_results
+        },
+        "cooperative": cooperative_results or None,
+        "non_cooperative": non_cooperative_results or None,
+        "manifest": manifest,
+    }
+
+    legacy_data = dict(shared_results)
+    legacy_data["frontend_manifest"] = manifest
+    if cooperative_results:
+        legacy_data["cooperative"] = cooperative_results
+    if non_cooperative_results:
+        legacy_data["non_cooperative"] = non_cooperative_results
+    legacy_data["frontend"] = frontend_payload
+
+    return {
+        "status": "SUCCESS",
+        "data": sanitize(legacy_data),
+        "frontend": sanitize(frontend_payload),
+        "manifest": manifest,
+    }
 
 def run_simulation_task(task_id, config):
     # 所有路径变量在函数开头统一定义，避免重复
@@ -47,9 +359,27 @@ def run_simulation_task(task_id, config):
         target_pos = config.get("target", "0,600,30")
         difficulty = config.get("difficulty", "Easy")
         strategy = config.get("strategy", "dynamic")
+        operation_mode = config.get("operationMode", "cooperative")
+        communication_mode = config.get("communicationMode", "centralized")
+        scene_type = config.get("sceneType", "")
         formation_spacing = float(config.get("formation_spacing", 12.0))
-        buildings = config.get("buildings", [])
         map_name = config.get("map_name", None)
+        leader_node_id = int(config.get("leaderNodeId", 0))
+        backup_leader_list = config.get("backupLeaderList", "")
+        distributed_hop_limit = int(config.get("distributedHopLimit", 1))
+        cooperative_failure_type = config.get("cooperativeFailureType", "node_failure")
+        failure_target_id = int(config.get("failureTargetId", -1))
+        failure_start_time = float(config.get("failureStartTime", -1.0))
+        failure_duration = float(config.get("failureDuration", -1.0))
+        recovery_policy = config.get("recoveryPolicy", "global_recovery")
+        recovery_objective = config.get("recoveryObjective", "connectivity")
+        recovery_cooldown = float(config.get("recoveryCooldown", 1.0))
+        allow_channel_reallocation = parse_bool(config.get("allowChannelReallocation"), True)
+        allow_power_adjustment = parse_bool(config.get("allowPowerAdjustment"), True)
+        allow_rate_adjustment = parse_bool(config.get("allowRateAdjustment"), True)
+        allow_relay_reselection = parse_bool(config.get("allowRelayReselection"), True)
+        allow_slot_reallocation = parse_bool(config.get("allowSlotReallocation"), True)
+        allow_route_rebuild = parse_bool(config.get("allowRouteRebuild"), True)
 
         # Custom 参数提取
         custom_params = {}
@@ -83,8 +413,28 @@ def run_simulation_task(task_id, config):
             "target": target_pos,
             "difficulty": difficulty,
             "strategy": strategy,
-            "buildings": buildings,
+            "operationMode": operation_mode,
+            "communicationMode": communication_mode,
+            "sceneType": scene_type,
             "map_name": map_name,
+            "map_file": config.get("map_file") or config.get("mapFile"),
+            "buildings": config.get("buildings", []),
+            "leaderNodeId": leader_node_id,
+            "backupLeaderList": backup_leader_list,
+            "distributedHopLimit": distributed_hop_limit,
+            "cooperativeFailureType": cooperative_failure_type,
+            "failureTargetId": failure_target_id,
+            "failureStartTime": failure_start_time,
+            "failureDuration": failure_duration,
+            "recoveryPolicy": recovery_policy,
+            "recoveryObjective": recovery_objective,
+            "recoveryCooldown": recovery_cooldown,
+            "allowChannelReallocation": allow_channel_reallocation,
+            "allowPowerAdjustment": allow_power_adjustment,
+            "allowRateAdjustment": allow_rate_adjustment,
+            "allowRelayReselection": allow_relay_reselection,
+            "allowSlotReallocation": allow_slot_reallocation,
+            "allowRouteRebuild": allow_route_rebuild,
             "custom_params": custom_params  # 将 Custom 参数加入哈希计算
         }
         param_str = json.dumps(hash_params, sort_keys=True)
@@ -109,6 +459,7 @@ def run_simulation_task(task_id, config):
                     if os.path.exists(out_dir_abs):
                         shutil.rmtree(out_dir_abs)
                     shutil.copytree(cache_dir, out_dir_abs)
+                    write_task_request_metadata(out_dir_abs, task_id, config, hash_params)
                     print(f"[{task_id}] [CACHE] 从缓存恢复完成: {cache_dir} -> {out_dir_abs}")
                     return
             except Exception as e:
@@ -119,18 +470,9 @@ def run_simulation_task(task_id, config):
         # ------------------------------------------------------------------
         # 1. 建筑物地图文件处理
         # ------------------------------------------------------------------
+        map_file = resolve_map_file(task_id, config)
         if map_name:
-            map_file = os.path.join(NS3_DIR, f"data_map/city_{map_name}.txt")
-            if not os.path.exists(map_file):
-                raise FileNotFoundError(f"Real map file not found: {map_file}")
             print(f"[{task_id}] 使用预先编译的现实世界地图: {map_name}")
-        else:
-            map_file = os.path.join(NS3_DIR, f"data_map/custom_city_{task_id}.txt")
-            os.makedirs(os.path.dirname(map_file), exist_ok=True)
-            with open(map_file, 'w') as f:
-                f.write("# xMin xMax yMin yMax zMin zMax\n")
-                for b in buildings:
-                    f.write(f"{b['xMin']} {b['xMax']} {b['yMin']} {b['yMax']} {b['zMin']} {b['zMax']}\n")
 
         # ------------------------------------------------------------------
         # 2. 调用高级轨迹规划器生成轨迹
@@ -154,28 +496,63 @@ def run_simulation_task(task_id, config):
         # 3. 运行 NS-3 底层核心
         # ------------------------------------------------------------------
         os.makedirs(out_dir_abs, exist_ok=True)
+        write_task_request_metadata(out_dir_abs, task_id, config, hash_params)
 
         shutil_map_cmd = ["cp", map_file, os.path.join(NS3_DIR, "data_map/custom_city.txt")]
         subprocess.run(shutil_map_cmd, cwd=NS3_DIR, check=True)
 
-        ns3_args = f"uav_resource_allocation --formation=custom --difficulty={difficulty} --strategy={strategy} --outputDir={out_dir_rel}"
-        
+        ns3_arg_tokens = [
+            "uav_resource_allocation",
+            "--formation=custom",
+            f"--difficulty={difficulty}",
+            f"--strategy={strategy}",
+            f"--outputDir={out_dir_rel}",
+            f"--operationMode={operation_mode}",
+            f"--sceneType={scene_type}" if scene_type else None,
+            f"--mapFile={os.path.relpath(map_file, NS3_DIR)}" if map_file else None,
+        ]
+
+        if operation_mode == "cooperative":
+            ns3_arg_tokens.extend([
+                f"--communicationMode={communication_mode}",
+                f"--leaderNodeId={leader_node_id}",
+                f"--backupLeaderList={backup_leader_list}" if backup_leader_list else None,
+                f"--distributedHopLimit={distributed_hop_limit}",
+                f"--cooperativeFailureType={cooperative_failure_type}",
+                f"--failureTargetId={failure_target_id}",
+                f"--failureStartTime={failure_start_time}",
+                f"--failureDuration={failure_duration}",
+                f"--recoveryPolicy={recovery_policy}",
+                f"--recoveryObjective={recovery_objective}",
+                f"--recoveryCooldown={recovery_cooldown}",
+                f"--allowChannelReallocation={'true' if allow_channel_reallocation else 'false'}",
+                f"--allowPowerAdjustment={'true' if allow_power_adjustment else 'false'}",
+                f"--allowRateAdjustment={'true' if allow_rate_adjustment else 'false'}",
+                f"--allowRelayReselection={'true' if allow_relay_reselection else 'false'}",
+                f"--allowSlotReallocation={'true' if allow_slot_reallocation else 'false'}",
+                f"--allowRouteRebuild={'true' if allow_route_rebuild else 'false'}",
+            ])
+
+        ns3_args = build_ns3_arg_string(ns3_arg_tokens)
+
         if difficulty == "Custom":
             # 只有 Custom 模式才追加详细参数
-            ns3_args += (f" --pathLossExp={custom_params['pathLossExp']}"
-                         f" --rxSens={custom_params['rxSens']}"
-                         f" --txPower={custom_params['txPower']}"
-                         f" --nakagamiM={custom_params['nakagamiM']}"
-                         f" --macRetries={custom_params['macRetries']}"
-                         f" --noiseFigure={custom_params['noiseFigure']}"
-                         f" --rtkNoise={custom_params['rtkNoise']}"
-                         f" --rtkDriftMag={custom_params['rtkDriftMag']}"
-                         f" --rtkDriftInt={custom_params['rtkDriftInt']}"
-                         f" --rtkDriftDur={custom_params['rtkDriftDur']}"
-                         f" --trafficLoad={custom_params['trafficLoad']}"
-                         f" --numInterfere={custom_params['numInterfere']}"
-                         f" --interfereRate={custom_params['interfereRate']}"
-                         f" --interfereDuty={custom_params['interfereDuty']}")
+            ns3_args += " " + build_ns3_arg_string([
+                f"--pathLossExp={custom_params['pathLossExp']}",
+                f"--rxSens={custom_params['rxSens']}",
+                f"--txPower={custom_params['txPower']}",
+                f"--nakagamiM={custom_params['nakagamiM']}",
+                f"--macRetries={custom_params['macRetries']}",
+                f"--noiseFigure={custom_params['noiseFigure']}",
+                f"--rtkNoise={custom_params['rtkNoise']}",
+                f"--rtkDriftMag={custom_params['rtkDriftMag']}",
+                f"--rtkDriftInt={custom_params['rtkDriftInt']}",
+                f"--rtkDriftDur={custom_params['rtkDriftDur']}",
+                f"--trafficLoad={custom_params['trafficLoad']}",
+                f"--numInterfere={custom_params['numInterfere']}",
+                f"--interfereRate={custom_params['interfereRate']}",
+                f"--interfereDuty={custom_params['interfereDuty']}",
+            ])
 
         ns3_cmd = [
             "./ns3", "run",
@@ -268,150 +645,45 @@ def get_results(task_id):
     """
     前端通过轮询此接口，获取任务状态和仿真产生的 CSV 数据
     """
-    out_dir = os.path.join(NS3_DIR, f"output/run_{task_id}")
-    status_file = os.path.join(out_dir, "status.json")
-    
-    if not os.path.exists(status_file):
-        return jsonify({"status": "RUNNING"})
-        
-    with open(status_file, "r") as f:
-        status_data = json.load(f)
-        
-    if status_data.get("status") == "FAILED":
-        return jsonify(status_data)
-        
-    # 如果成功，开始读取 CSV 文件准备返回给前端！
     try:
-        results_data = {}
-        
-        # 1. 轨迹与RTK点位位置
-        # 优化: 在后端将 positions 与 resource_detailed 进行合并，方便前端直接使用 Uav.power / Uav.interference
-        pos_path = os.path.join(out_dir, "rtk-node-positions.csv")
-        res_detailed_path = os.path.join(out_dir, "resource_allocation_detailed.csv")
-        
-        if os.path.exists(pos_path):
-            df_pos = pd.read_csv(pos_path)
-            
-            # 尝试根据 resource_detailed 丰富 positions
-            if os.path.exists(res_detailed_path):
-                try:
-                    df_res = pd.read_csv(res_detailed_path)
-                    # 统一列名以进行合并
-                    # resource_detailed usually has: time, node_id, tx_power, interference
-                    # positions usually has: time/time_s, nodeId, ...
-                    
-                    # 1. 处理时间列名对齐 (time vs time_s)
-                    if 'time' in df_res.columns and 'time_s' in df_pos.columns:
-                        df_res.rename(columns={'time': 'time_s'}, inplace=True)
-                        merge_on_time = 'time_s'
-                    elif 'time' in df_pos.columns:
-                        merge_on_time = 'time'
-                    else:
-                        merge_on_time = None # 无法确定时间列
+        results = load_all_results(task_id)
+        return jsonify(results)
+    except Exception as e:
+        return jsonify({
+            "status": "ERROR",
+            "message": f"Failed to read result files: {str(e)}"
+        })
 
-                    # 2. 处理节点ID列名对齐 (node_id vs nodeId)
-                    if 'node_id' in df_res.columns:
-                        df_res.rename(columns={'node_id': 'nodeId'}, inplace=True)
-                    
-                    if merge_on_time and 'nodeId' in df_pos.columns and 'nodeId' in df_res.columns:
-                        # [Critical Fix] 解决浮点数时间不匹配问题
-                        # 将两个 DataFrame 的时间列都四舍五入到 3 位小数 (根据 ns-3 常见精度)
-                        df_pos['time_merge_key'] = df_pos[merge_on_time].round(3)
-                        df_res['time_merge_key'] = df_res[merge_on_time].round(3)
-
-                        # 处理列名兼容性 (interference -> interference_dBm)
-                        if 'interference_dBm' in df_res.columns and 'interference' not in df_res.columns:
-                            df_res.rename(columns={'interference_dBm': 'interference'}, inplace=True)
-                        
-                        # 准备要合并的列
-                        merge_cols = ['time_merge_key', 'nodeId', 'tx_power', 'channel', 'data_rate', 'neighbors']
-                        if 'interference' in df_res.columns:
-                            merge_cols.append('interference')
-                        if 'worst_sinr_dB' in df_res.columns:
-                            merge_cols.append('worst_sinr_dB')
-
-                        print(f"[{task_id}] 数据合并调试: Pos Time Range: {df_pos['time_merge_key'].min()}~{df_pos['time_merge_key'].max()}, Sample: {df_pos['time_merge_key'].iloc[0]}")
-                        print(f"[{task_id}] 数据合并调试: Res Time Range: {df_res['time_merge_key'].min()}~{df_res['time_merge_key'].max()}, Sample: {df_res['time_merge_key'].iloc[0]}")
-
-                        # 3. 执行左连接合并 (使用 round 后的 key)
-                        merged_df = pd.merge(df_pos, df_res[merge_cols], 
-                                           on=['time_merge_key', 'nodeId'], 
-                                           how='left')
-                        
-                        # 4. 重命名列以适配前端 (tx_power -> power)
-                        if 'tx_power' in merged_df.columns:
-                            merged_df.rename(columns={'tx_power': 'power'}, inplace=True)
-                        # 重命名 worst_sinr_dB -> sinr 以方便前端使用
-                        if 'worst_sinr_dB' in merged_df.columns:
-                            merged_df.rename(columns={'worst_sinr_dB': 'sinr'}, inplace=True)
-                        
-                        # 清理临时 key
-                        if 'time_merge_key' in merged_df.columns:
-                            merged_df.drop(columns=['time_merge_key'], inplace=True)
-                        df_pos.drop(columns=['time_merge_key'], inplace=True) # 清理原 df_pos 的临时 key
-
-                        # 检查合并效果
-                        null_power_count = merged_df['power'].isnull().sum() if 'power' in merged_df.columns else len(merged_df)
-                        print(f"[{task_id}] 资源合并报告: 总行数 {len(merged_df)}, 成功匹配 {len(merged_df) - null_power_count} 行, 未匹配 {null_power_count} 行")
-                            
-                        # 替换原始 df_pos
-                        df_pos = merged_df
-                        # print(f"[{task_id}] 成功合并资源数据到位置信息 ({len(df_pos)} 行)")
-                except Exception as merge_err:
-                    print(f"[{task_id}] 资源数据合并失败，忽略: {merge_err}")
-                    import traceback
-                    traceback.print_exc()
-
-            print(f"[{task_id}] 成功读取位置点: {len(df_pos)}")
-            results_data["positions"] = df_pos.to_dict(orient="records")
-
-            
-        # 2. 拓扑演化 (图表用)
-        topo_evol_path = os.path.join(out_dir, "topology_evolution.csv")
-        if os.path.exists(topo_evol_path):
-            df = pd.read_csv(topo_evol_path)
-            print(f"[{task_id}] 成功读取拓扑周期: {len(df)}")
-            results_data["topology_evolution"] = df.to_dict(orient="records")
-            
-        # 3. QoS 数据 (图表用)
-        qos_path = os.path.join(out_dir, "qos_performance.csv")
-        if os.path.exists(qos_path):
-            results_data["qos"] = pd.read_csv(qos_path).to_dict(orient="records")
-            
-        # 4. 通信事件 (激光动画用)
-        trans_path = os.path.join(out_dir, "rtk-node-transmissions.csv")
-        if os.path.exists(trans_path):
-            results_data["transmissions"] = pd.read_csv(trans_path).to_dict(orient="records")
-            
-        # 5. 拓扑连线变化 (3D连线逻辑用)
-        topo_changes_path = os.path.join(out_dir, "rtk-topology-changes.txt")
-        if os.path.exists(topo_changes_path):
-            with open(topo_changes_path, 'r') as f:
-                results_data["topology_links"] = [line.strip() for line in f.readlines()]
-                
-        # 6. 流量统计汇总 (最终面板用)
-        flow_stats_path = os.path.join(out_dir, "rtk-flow-stats.csv")
-        if os.path.exists(flow_stats_path):
-            results_data["flow_summary"] = pd.read_csv(flow_stats_path).to_dict(orient="records")
-
-        # 7. 详细资源分配 (进阶分析用)
-        res_detailed_path = os.path.join(out_dir, "resource_allocation_detailed.csv")
-        if os.path.exists(res_detailed_path):
-            results_data["resource_detailed"] = pd.read_csv(res_detailed_path).to_dict(orient="records")
-
-        # 8. 详细拓扑统计 (网络密度/平均度/链路数 实时态势面板用)
-        topo_detailed_path = os.path.join(out_dir, "topology_detailed.csv")
-        if os.path.exists(topo_detailed_path):
-            results_data["topology_detailed"] = pd.read_csv(topo_detailed_path).to_dict(orient="records")
-
+@app.route('/api/results/<task_id>/frontend', methods=['GET'])
+def get_frontend_results(task_id):
+    try:
+        results = load_all_results(task_id)
+        if results.get("status") != "SUCCESS":
+            return jsonify(results)
         return jsonify({
             "status": "SUCCESS",
-            "data": sanitize(results_data)
+            "data": results["frontend"]
         })
     except Exception as e:
         return jsonify({
             "status": "ERROR",
-            "message": f"Failed to read result CSVs: {str(e)}"
+            "message": f"Failed to build frontend payload: {str(e)}"
+        })
+
+@app.route('/api/results/<task_id>/manifest', methods=['GET'])
+def get_results_manifest(task_id):
+    try:
+        results = load_all_results(task_id)
+        if results.get("status") != "SUCCESS":
+            return jsonify(results)
+        return jsonify({
+            "status": "SUCCESS",
+            "data": results["manifest"]
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "ERROR",
+            "message": f"Failed to build manifest: {str(e)}"
         })
 
 @app.route('/api/map_data/<map_name>', methods=['GET'])

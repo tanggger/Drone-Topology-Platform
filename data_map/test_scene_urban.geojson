@@ -1,0 +1,116 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "feature_type": "building",
+        "scene_type": "urban",
+        "name": "block_a",
+        "enabled": true,
+        "height_m": 24
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [40, 40],
+            [90, 40],
+            [90, 95],
+            [40, 95],
+            [40, 40]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "feature_type": "building",
+        "scene_type": "urban",
+        "name": "block_b_complex",
+        "enabled": true,
+        "height_m": 18
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [130, 60],
+            [180, 60],
+            [180, 110],
+            [150, 110],
+            [150, 90],
+            [130, 90],
+            [130, 60]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "feature_type": "building",
+        "scene_type": "urban",
+        "name": "skyscraper_c",
+        "enabled": true,
+        "height_m": 60
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [100, 120],
+            [120, 120],
+            [120, 140],
+            [100, 140],
+            [100, 120]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "feature_type": "building",
+        "scene_type": "urban",
+        "name": "low_warehouse_d",
+        "enabled": true,
+        "height_m": 12
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [20, 120],
+            [80, 120],
+            [80, 150],
+            [20, 150],
+            [20, 120]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "feature_type": "open_field",
+        "scene_type": "urban",
+        "name": "central_park",
+        "enabled": true
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [95, 40],
+            [125, 40],
+            [125, 80],
+            [95, 80],
+            [95, 40]
+          ]
+        ]
+      }
+    }
+  ]
+}

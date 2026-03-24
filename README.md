@@ -14,7 +14,8 @@
 ## 目录说明
 
 - `scratch/`
-  自定义 ns-3 主程序。当前保留的核心入口是 `uav_resource_allocation.cc`、`rtk_benchmark.cc`、`rtk_simulation.cc`。
+  自定义 ns-3 主程序。当前保留的核心入口是 `uav_resource_allocation`、`rtk_benchmark.cc`、`rtk_simulation.cc`。
+  其中 `uav_resource_allocation` 已从单文件拆分为 `scratch/uav_ra/` 目录下的多文件结构。
 - `rtk/`
   RTK 数据预处理、轨迹生成、测试和可视化研究。
 - `visualization/`
@@ -42,7 +43,12 @@
 
 入口文件：
 
-- `scratch/uav_resource_allocation.cc`
+- `scratch/uav_ra/main.cc`
+- `scratch/uav_ra/simulation_setup.cc`
+- `scratch/uav_ra/scenario_environment.cc`
+- `scratch/uav_ra/topology_control.cc`
+- `scratch/uav_ra/traffic_metrics.cc`
+- `scratch/uav_ra/output_runtime.cc`
 - `run_uav_simulation.sh`
 - `analyze_resource_allocation.py`
 - `visualize_results.py`
@@ -50,9 +56,25 @@
 用途：
 
 - 加载编队轨迹
+- 装配场景环境、地图建筑和干扰节点
 - 构建无人机自组网
 - 执行动态信道/功率/速率分配
 - 输出 QoS、拓扑、流量和资源分配结果
+
+当前后端职责分层：
+
+- `main.cc`
+  负责参数解析、模式判断、调度顺序和仿真运行。
+- `simulation_setup.cc`
+  负责节点移动性、难度参数、WiFi/信道、地图建筑、协议栈和业务初始化。
+- `scenario_environment.cc`
+  负责轨迹加载、RTK 噪声注入、编队移动和干扰节点生成。
+- `topology_control.cc`
+  负责拓扑更新、SINR 估计、链路质量和资源控制逻辑。
+- `traffic_metrics.cc`
+  负责 TDMA、业务流、QoS 监控、位置与拓扑日志。
+- `output_runtime.cc`
+  负责输出文件初始化、结果汇总和仿真收尾。
 
 常用命令：
 
@@ -64,6 +86,13 @@
 python3 analyze_resource_allocation.py output/<result_dir> --all
 python3 visualize_results.py output/<result_dir>
 ```
+
+当前建议的后端增量开发起点：
+
+1. 先在 `scratch/uav_ra/` 中统一场景环境配置层。
+2. 再把 `difficulty + mapFile + 建筑 + 干扰` 收拢成统一入口。
+3. 再让环境参数统一作用于拓扑和链路质量。
+4. 最后再进入合作/非合作模式、观测输出、推断与对抗。
 
 ### 2. RTK Benchmark 主线
 

@@ -1,0 +1,93 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "feature_type": "forest",
+        "scene_type": "forest",
+        "name": "pine_zone_main",
+        "enabled": true,
+        "canopy_height_m": 14,
+        "density_class": "medium"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [20, 20],
+            [180, 20],
+            [180, 140],
+            [20, 140],
+            [20, 20]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "feature_type": "forest",
+        "scene_type": "forest",
+        "name": "dense_core",
+        "enabled": true,
+        "canopy_height_m": 20,
+        "density_class": "heavy"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [60, 60],
+            [100, 60],
+            [100, 100],
+            [60, 100],
+            [60, 60]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "feature_type": "open_field",
+        "scene_type": "forest",
+        "name": "clearing_spot",
+        "enabled": true
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [130, 80],
+            [150, 80],
+            [150, 100],
+            [130, 100],
+            [130, 80]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "feature_type": "water",
+        "scene_type": "forest",
+        "name": "stream_crossing",
+        "enabled": true
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [20, 110],
+            [180, 110],
+            [180, 120],
+            [20, 120],
+            [20, 110]
+          ]
+        ]
+      }
+    }
+  ]
+}
