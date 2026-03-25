@@ -17,7 +17,33 @@ class ForestOverlayPropagationLossModel : public PropagationLossModel
     int64_t DoAssignStreams(int64_t stream) override;
 };
 
+class WaterSurfaceOverlayPropagationLossModel : public PropagationLossModel
+{
+  public:
+    static TypeId GetTypeId();
+
+  private:
+    double DoCalcRxPower(double txPowerDbm,
+                         Ptr<MobilityModel> a,
+                         Ptr<MobilityModel> b) const override;
+    int64_t DoAssignStreams(int64_t stream) override;
+};
+
+class UrbanAltitudeAdaptivePropagationLossModel : public PropagationLossModel
+{
+  public:
+    static TypeId GetTypeId();
+
+  private:
+    double DoCalcRxPower(double txPowerDbm,
+                         Ptr<MobilityModel> a,
+                         Ptr<MobilityModel> b) const override;
+    int64_t DoAssignStreams(int64_t stream) override;
+};
+
 NS_OBJECT_ENSURE_REGISTERED(ForestOverlayPropagationLossModel);
+NS_OBJECT_ENSURE_REGISTERED(WaterSurfaceOverlayPropagationLossModel);
+NS_OBJECT_ENSURE_REGISTERED(UrbanAltitudeAdaptivePropagationLossModel);
 
 TypeId
 ForestOverlayPropagationLossModel::GetTypeId()
@@ -27,6 +53,28 @@ ForestOverlayPropagationLossModel::GetTypeId()
             .SetParent<PropagationLossModel>()
             .SetGroupName("Propagation")
             .AddConstructor<ForestOverlayPropagationLossModel>();
+    return tid;
+}
+
+TypeId
+WaterSurfaceOverlayPropagationLossModel::GetTypeId()
+{
+    static TypeId tid =
+        TypeId("ns3::WaterSurfaceOverlayPropagationLossModel")
+            .SetParent<PropagationLossModel>()
+            .SetGroupName("Propagation")
+            .AddConstructor<WaterSurfaceOverlayPropagationLossModel>();
+    return tid;
+}
+
+TypeId
+UrbanAltitudeAdaptivePropagationLossModel::GetTypeId()
+{
+    static TypeId tid =
+        TypeId("ns3::UrbanAltitudeAdaptivePropagationLossModel")
+            .SetParent<PropagationLossModel>()
+            .SetGroupName("Propagation")
+            .AddConstructor<UrbanAltitudeAdaptivePropagationLossModel>();
     return tid;
 }
 
@@ -111,6 +159,176 @@ double EstimateForestOverlayLossDb(const Vector& src, const Vector& dst)
     return std::min(24.0, totalLoss);
 }
 
+double EstimateForestVegetationLossRateDbPerM(double baseLossDbPerM,
+                                              double carrierFrequencyGHz,
+                                              double channelBandwidthMHz,
+                                              const std::string& polarizationMode)
+{
+    if (baseLossDbPerM <= 0.0)
+    {
+        return 0.0;
+    }
+
+    const double freqGHz = std::max(0.7, carrierFrequencyGHz);
+    const double bandwidthMHz = std::max(5.0, channelBandwidthMHz);
+    const double freqFactor = std::pow(freqGHz / 5.18, 0.65);
+    const double bandwidthFactor =
+        1.0 + 0.04 * std::log2(std::max(1.0, bandwidthMHz / 20.0));
+
+    double polarizationFactor = 1.0;
+    if (polarizationMode == "horizontal")
+    {
+        polarizationFactor = 1.10;
+    }
+    else if (polarizationMode == "dual")
+    {
+        polarizationFactor = 1.05;
+    }
+
+    return baseLossDbPerM * freqFactor * bandwidthFactor * polarizationFactor;
+}
+
+double Clamp01(double value)
+{
+    return std::max(0.0, std::min(1.0, value));
+}
+
+double EstimateWaterSurfaceExposure(const Vector& src, const Vector& dst)
+{
+    const double dx = dst.x - src.x;
+    const double dy = dst.y - src.y;
+    const double dz = dst.z - src.z;
+    const double dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (dist < 1e-6)
+    {
+        return 0.0;
+    }
+
+    if (!g_waterRegions.empty())
+    {
+        double weightedExposure = 0.0;
+        for (const auto& region : g_waterRegions)
+        {
+            const double depth = EstimateSegmentLengthInsidePolygon(src, dst, region.points);
+            if (depth <= 0.0)
+            {
+                continue;
+            }
+            weightedExposure += (depth / dist) * region.weight;
+        }
+        if (weightedExposure > 0.0)
+        {
+            return Clamp01(weightedExposure);
+        }
+    }
+
+    if (g_environmentSummary.sceneType == "lake" || g_environmentSummary.hasWaterSurface ||
+        g_environmentConfig.sceneType == "lake")
+    {
+        return 1.0;
+    }
+
+    return 0.0;
+}
+
+double EstimateWaterSurfaceVolatilityLossDb(const Vector& src,
+                                            const Vector& dst,
+                                            double now)
+{
+    if (!g_environmentSummary.reflectionAware ||
+        g_environmentSummary.lakeVolatilityJitterDb <= 0.0)
+    {
+        return 0.0;
+    }
+
+    const double exposure = EstimateWaterSurfaceExposure(src, dst);
+    if (exposure <= 0.0)
+    {
+        return 0.0;
+    }
+
+    const double dx = dst.x - src.x;
+    const double dy = dst.y - src.y;
+    const double horizontalDist = std::sqrt(dx * dx + dy * dy);
+    const double avgAltitude = 0.5 * (src.z + dst.z);
+    const double heightDiff = std::abs(src.z - dst.z);
+    constexpr double kPi = 3.14159265358979323846;
+    const double elevationAngle =
+        std::atan2(std::max(1.0, heightDiff), std::max(1.0, horizontalDist));
+    const double grazingFactor =
+        Clamp01(1.10 - elevationAngle / (kPi / 3.0)) *
+        Clamp01(1.15 - avgAltitude / 180.0);
+    const double geometryFactor = std::max(0.20, 0.35 + 0.65 * grazingFactor);
+
+    const double phaseSeed = src.x * 0.013 + src.y * 0.017 + dst.x * 0.019 +
+                             dst.y * 0.023 + (src.z + dst.z) * 0.007;
+    const double oscillation =
+        Clamp01(0.5 + 0.32 * std::sin(0.55 * now + phaseSeed) +
+                0.18 * std::sin(1.35 * now + phaseSeed * 1.7));
+    const double jitterLoss =
+        g_environmentSummary.lakeVolatilityJitterDb * exposure * geometryFactor * oscillation;
+
+    double deepFadeLoss = 0.0;
+    if (g_environmentSummary.lakeDeepFadeProbability > 0.0 &&
+        g_environmentSummary.lakeDeepFadeMaxDb > 0.0)
+    {
+        const double fadeGate =
+            Clamp01(0.5 + 0.5 * std::sin(0.28 * now + phaseSeed * 2.3));
+        const double triggerThreshold =
+            Clamp01(1.0 - g_environmentSummary.lakeDeepFadeProbability);
+        if (fadeGate > triggerThreshold)
+        {
+            const double fadeStrength =
+                (fadeGate - triggerThreshold) /
+                std::max(1e-3, 1.0 - triggerThreshold);
+            deepFadeLoss = g_environmentSummary.lakeDeepFadeMaxDb * exposure *
+                           geometryFactor * fadeStrength;
+        }
+    }
+
+    return jitterLoss + deepFadeLoss;
+}
+
+double EstimateUrbanAltitudeAdjustmentDb(const Vector& src, const Vector& dst)
+{
+    if (!g_environmentSummary.hasBuildings ||
+        (g_environmentSummary.sceneType != "urban" &&
+         g_environmentConfig.sceneType != "urban"))
+    {
+        return 0.0;
+    }
+
+    const double avgBuildingHeight = std::max(5.0, g_environmentSummary.avgBuildingHeightM);
+    const double avgAltitude = 0.5 * (src.z + dst.z);
+    const double relativeAltitude = avgAltitude / avgBuildingHeight;
+
+    const double streetWidth = g_environmentSummary.avgStreetWidthM > 1e-6
+                                   ? g_environmentSummary.avgStreetWidthM
+                                   : 12.0;
+    const double narrowStreetFactor = Clamp01((20.0 - streetWidth) / 20.0);
+    const double densityFactor =
+        Clamp01(g_environmentSummary.buildingDensityPerKm2 / 15000.0);
+    const double coverageFactor = Clamp01(g_environmentSummary.buildingCoverageRatio);
+    const double canyonFactor = Clamp01(0.4 * coverageFactor + 0.3 * densityFactor +
+                                        0.3 * narrowStreetFactor);
+
+    if (relativeAltitude < 0.85 && g_environmentSummary.urbanAltitudePenaltyDbLow > 0.0)
+    {
+        const double severity = (0.85 - relativeAltitude) / 0.85;
+        return g_environmentSummary.urbanAltitudePenaltyDbLow * severity *
+               (0.55 + 0.45 * canyonFactor);
+    }
+
+    if (relativeAltitude > 1.05 && g_environmentSummary.urbanAltitudeGainDbHigh > 0.0)
+    {
+        const double relief = Clamp01((relativeAltitude - 1.05) / 0.75);
+        return -g_environmentSummary.urbanAltitudeGainDbHigh * relief *
+               (0.45 + 0.55 * (1.0 - 0.5 * canyonFactor));
+    }
+
+    return 0.0;
+}
+
 } // namespace
 
 double
@@ -128,6 +346,46 @@ ForestOverlayPropagationLossModel::DoCalcRxPower(double txPowerDbm,
 
 int64_t
 ForestOverlayPropagationLossModel::DoAssignStreams(int64_t stream)
+{
+    return 0;
+}
+
+double
+WaterSurfaceOverlayPropagationLossModel::DoCalcRxPower(double txPowerDbm,
+                                                       Ptr<MobilityModel> a,
+                                                       Ptr<MobilityModel> b) const
+{
+    if (!a || !b)
+    {
+        return txPowerDbm;
+    }
+
+    return txPowerDbm - EstimateWaterSurfaceVolatilityLossDb(a->GetPosition(),
+                                                             b->GetPosition(),
+                                                             Simulator::Now().GetSeconds());
+}
+
+int64_t
+WaterSurfaceOverlayPropagationLossModel::DoAssignStreams(int64_t stream)
+{
+    return 0;
+}
+
+double
+UrbanAltitudeAdaptivePropagationLossModel::DoCalcRxPower(double txPowerDbm,
+                                                         Ptr<MobilityModel> a,
+                                                         Ptr<MobilityModel> b) const
+{
+    if (!a || !b)
+    {
+        return txPowerDbm;
+    }
+
+    return txPowerDbm - EstimateUrbanAltitudeAdjustmentDb(a->GetPosition(), b->GetPosition());
+}
+
+int64_t
+UrbanAltitudeAdaptivePropagationLossModel::DoAssignStreams(int64_t stream)
 {
     return 0;
 }
@@ -175,6 +433,20 @@ EnvironmentPreset BuildSceneBasePreset(const std::string& sceneType)
         preset.hasWaterSurface = false;
         preset.reflectionAware = false;
         preset.pathLossExponent = 3.3;
+        preset.urbanAltitudePenaltyDbLow = 7.0;
+        preset.urbanAltitudeGainDbHigh = 6.0;
+        preset.urbanStreetCanyonFactor = 1.0;
+        preset.reroutePressureFactor = 1.30;
+        preset.controlMessageUrgencyFactor = 1.25;
+        preset.relayInstabilityFactor = 1.20;
+        preset.formationReconfigPenalty = 1.25;
+        preset.carrierFrequencyGHz = 5.18;
+        preset.channelBandwidthMHz = 20.0;
+        preset.polarizationMode = "vertical";
+        preset.lakeVolatilityJitterDb = 0.0;
+        preset.lakeDeepFadeProbability = 0.0;
+        preset.lakeDeepFadeMaxDb = 0.0;
+        preset.lakeReflectionDelayJitterMs = 0.0;
         return preset;
     }
 
@@ -192,6 +464,20 @@ EnvironmentPreset BuildSceneBasePreset(const std::string& sceneType)
         preset.hasWaterSurface = false;
         preset.reflectionAware = false;
         preset.pathLossExponent = 3.4;
+        preset.urbanAltitudePenaltyDbLow = 0.0;
+        preset.urbanAltitudeGainDbHigh = 0.0;
+        preset.urbanStreetCanyonFactor = 0.0;
+        preset.reroutePressureFactor = 1.20;
+        preset.controlMessageUrgencyFactor = 1.10;
+        preset.relayInstabilityFactor = 1.15;
+        preset.formationReconfigPenalty = 1.15;
+        preset.carrierFrequencyGHz = 5.18;
+        preset.channelBandwidthMHz = 20.0;
+        preset.polarizationMode = "vertical";
+        preset.lakeVolatilityJitterDb = 0.0;
+        preset.lakeDeepFadeProbability = 0.0;
+        preset.lakeDeepFadeMaxDb = 0.0;
+        preset.lakeReflectionDelayJitterMs = 0.0;
         return preset;
     }
 
@@ -209,6 +495,20 @@ EnvironmentPreset BuildSceneBasePreset(const std::string& sceneType)
         preset.hasWaterSurface = true;
         preset.reflectionAware = true;
         preset.pathLossExponent = 2.1;
+        preset.urbanAltitudePenaltyDbLow = 0.0;
+        preset.urbanAltitudeGainDbHigh = 0.0;
+        preset.urbanStreetCanyonFactor = 0.0;
+        preset.reroutePressureFactor = 1.05;
+        preset.controlMessageUrgencyFactor = 1.15;
+        preset.relayInstabilityFactor = 1.10;
+        preset.formationReconfigPenalty = 1.08;
+        preset.carrierFrequencyGHz = 5.18;
+        preset.channelBandwidthMHz = 20.0;
+        preset.polarizationMode = "vertical";
+        preset.lakeVolatilityJitterDb = 4.0;
+        preset.lakeDeepFadeProbability = 0.18;
+        preset.lakeDeepFadeMaxDb = 8.0;
+        preset.lakeReflectionDelayJitterMs = 18.0;
         return preset;
     }
 
@@ -224,6 +524,20 @@ EnvironmentPreset BuildSceneBasePreset(const std::string& sceneType)
     preset.hasWaterSurface = false;
     preset.reflectionAware = false;
     preset.pathLossExponent = 2.5;
+    preset.urbanAltitudePenaltyDbLow = 0.0;
+    preset.urbanAltitudeGainDbHigh = 0.0;
+    preset.urbanStreetCanyonFactor = 0.0;
+    preset.reroutePressureFactor = 1.00;
+    preset.controlMessageUrgencyFactor = 1.00;
+    preset.relayInstabilityFactor = 1.00;
+    preset.formationReconfigPenalty = 1.00;
+    preset.carrierFrequencyGHz = 5.18;
+    preset.channelBandwidthMHz = 20.0;
+    preset.polarizationMode = "vertical";
+    preset.lakeVolatilityJitterDb = 0.0;
+    preset.lakeDeepFadeProbability = 0.0;
+    preset.lakeDeepFadeMaxDb = 0.0;
+    preset.lakeReflectionDelayJitterMs = 0.0;
     return preset;
 }
 
@@ -271,10 +585,12 @@ ObservationPreset BuildObservationPreset(OperationMode operationMode,
     }
     else if (sceneType == "forest")
     {
-        preset.observationRangeM = 140.0;
-        preset.randomDropRate = 0.18;
-        preset.positionNoiseStdDevM = 25.0;
-        preset.powerNoiseStdDevDb = 4.5;
+        // Forest should be harder than open-field, but still produce enough detections
+        // for track creation and graph inference.
+        preset.observationRangeM = 210.0;
+        preset.randomDropRate = 0.12;
+        preset.positionNoiseStdDevM = 20.0;
+        preset.powerNoiseStdDevDb = 4.0;
     }
     else if (sceneType == "lake")
     {
@@ -388,6 +704,8 @@ void BuildScenarioEnvironmentConfig(OperationMode operationMode,
                                     const std::string& formationName,
                                     const std::string& mapFile,
                                     const CooperativeControlConfig& cooperativeConfig,
+                                    const NonCooperativeAttackConfig& nonCooperativeAttackConfig,
+                                    const SceneRealismOverrides& sceneRealismOverrides,
                                     double customPathLossExp,
                                     double customRxSensitivity,
                                     double customTxPower)
@@ -420,6 +738,8 @@ void BuildScenarioEnvironmentConfig(OperationMode operationMode,
     g_environmentConfig.interferencePreset = BuildInterferencePreset(difficulty);
     g_environmentConfig.trafficPlatformPreset = BuildTrafficPlatformPreset(difficulty);
     g_environmentConfig.cooperativeControlConfig = cooperativeConfig;
+    g_environmentConfig.nonCooperativeAttackConfig = nonCooperativeAttackConfig;
+    g_environmentConfig.sceneRealismOverrides = sceneRealismOverrides;
 
     if (operationMode == OperationMode::Cooperative)
     {
@@ -437,12 +757,101 @@ void BuildScenarioEnvironmentConfig(OperationMode operationMode,
                 g_config.numUAVs > 1 ? 1 : 0;
         }
     }
+    if (operationMode == OperationMode::NonCooperative &&
+        g_environmentConfig.nonCooperativeAttackConfig.enabled)
+    {
+        g_environmentConfig.nonCooperativeAttackConfig.attackEvaluationDuration =
+            std::max(1.0, g_environmentConfig.nonCooperativeAttackConfig.attackEvaluationDuration);
+        g_environmentConfig.nonCooperativeAttackConfig.attackNeighborhoodHop =
+            std::max<uint32_t>(1, g_environmentConfig.nonCooperativeAttackConfig.attackNeighborhoodHop);
+    }
 
     if (difficulty == "Custom")
     {
         g_environmentConfig.environmentPreset.pathLossExponent = customPathLossExp;
         g_environmentConfig.trafficPlatformPreset.rxSensitivity = customRxSensitivity;
         g_environmentConfig.trafficPlatformPreset.txPower = customTxPower;
+    }
+
+    if (g_environmentConfig.sceneType == "forest")
+    {
+        g_environmentConfig.environmentPreset.vegetationLossDbPerM =
+            EstimateForestVegetationLossRateDbPerM(
+                g_environmentConfig.environmentPreset.vegetationLossDbPerM,
+                g_environmentConfig.environmentPreset.carrierFrequencyGHz,
+                g_environmentConfig.environmentPreset.channelBandwidthMHz,
+                g_environmentConfig.environmentPreset.polarizationMode);
+    }
+
+    if (sceneRealismOverrides.enabled)
+    {
+        auto& preset = g_environmentConfig.environmentPreset;
+        if (sceneRealismOverrides.urbanAltitudePenaltyDbLow >= 0.0)
+        {
+            preset.urbanAltitudePenaltyDbLow = sceneRealismOverrides.urbanAltitudePenaltyDbLow;
+        }
+        if (sceneRealismOverrides.urbanAltitudeGainDbHigh >= 0.0)
+        {
+            preset.urbanAltitudeGainDbHigh = sceneRealismOverrides.urbanAltitudeGainDbHigh;
+        }
+        if (sceneRealismOverrides.urbanStreetCanyonFactor >= 0.0)
+        {
+            preset.urbanStreetCanyonFactor = sceneRealismOverrides.urbanStreetCanyonFactor;
+        }
+        if (sceneRealismOverrides.lakeVolatilityJitterDb >= 0.0)
+        {
+            preset.lakeVolatilityJitterDb = sceneRealismOverrides.lakeVolatilityJitterDb;
+        }
+        if (sceneRealismOverrides.lakeDeepFadeProbability >= 0.0)
+        {
+            preset.lakeDeepFadeProbability = sceneRealismOverrides.lakeDeepFadeProbability;
+        }
+        if (sceneRealismOverrides.lakeDeepFadeMaxDb >= 0.0)
+        {
+            preset.lakeDeepFadeMaxDb = sceneRealismOverrides.lakeDeepFadeMaxDb;
+        }
+        if (sceneRealismOverrides.lakeReflectionDelayJitterMs >= 0.0)
+        {
+            preset.lakeReflectionDelayJitterMs = sceneRealismOverrides.lakeReflectionDelayJitterMs;
+        }
+        if (sceneRealismOverrides.carrierFrequencyGHz > 0.0)
+        {
+            preset.carrierFrequencyGHz = sceneRealismOverrides.carrierFrequencyGHz;
+        }
+        if (sceneRealismOverrides.channelBandwidthMHz > 0.0)
+        {
+            preset.channelBandwidthMHz = sceneRealismOverrides.channelBandwidthMHz;
+        }
+        if (!sceneRealismOverrides.polarizationMode.empty())
+        {
+            preset.polarizationMode = sceneRealismOverrides.polarizationMode;
+        }
+        if (sceneRealismOverrides.reroutePressureFactor >= 0.0)
+        {
+            preset.reroutePressureFactor = sceneRealismOverrides.reroutePressureFactor;
+        }
+        if (sceneRealismOverrides.controlMessageUrgencyFactor >= 0.0)
+        {
+            preset.controlMessageUrgencyFactor =
+                sceneRealismOverrides.controlMessageUrgencyFactor;
+        }
+        if (sceneRealismOverrides.relayInstabilityFactor >= 0.0)
+        {
+            preset.relayInstabilityFactor = sceneRealismOverrides.relayInstabilityFactor;
+        }
+        if (sceneRealismOverrides.formationReconfigPenalty >= 0.0)
+        {
+            preset.formationReconfigPenalty = sceneRealismOverrides.formationReconfigPenalty;
+        }
+
+        if (g_environmentConfig.sceneType == "forest")
+        {
+            preset.vegetationLossDbPerM = EstimateForestVegetationLossRateDbPerM(
+                preset.vegetationLossDbPerM,
+                preset.carrierFrequencyGHz,
+                preset.channelBandwidthMHz,
+                preset.polarizationMode);
+        }
     }
 
     if (!g_environmentConfig.hasMapGeometry)
@@ -493,7 +902,12 @@ void ApplyScenarioEnvironmentToLegacyState()
     g_environmentSummary.baseModel = env.baseModel;
     g_environmentSummary.environmentSource = g_environmentConfig.environmentSource;
     g_environmentSummary.geometryInputMode = g_environmentConfig.geometryInputMode;
-    g_environmentSummary.effectiveModelSummary = env.baseModel;
+    g_environmentSummary.effectiveModelSummary =
+        env.sceneType == "lake" && env.reflectionAware
+            ? env.baseModel + " + water-surface volatility overlay"
+            : env.sceneType == "urban" && env.hasBuildings
+                  ? env.baseModel + " + altitude-aware urban overlay"
+                  : env.baseModel;
     g_environmentSummary.environmentContributionSummary =
         env.sceneType + " scene, source=" + g_environmentConfig.environmentSource;
     g_environmentSummary.hasBuildings =
@@ -507,6 +921,20 @@ void ApplyScenarioEnvironmentToLegacyState()
     g_environmentSummary.interferenceFactor = env.interferenceFactor;
     g_environmentSummary.connectivityRangeFactor = env.connectivityRangeFactor;
     g_environmentSummary.pathLossExponent = env.pathLossExponent;
+    g_environmentSummary.urbanAltitudePenaltyDbLow = env.urbanAltitudePenaltyDbLow;
+    g_environmentSummary.urbanAltitudeGainDbHigh = env.urbanAltitudeGainDbHigh;
+    g_environmentSummary.urbanStreetCanyonFactor = env.urbanStreetCanyonFactor;
+    g_environmentSummary.reroutePressureFactor = env.reroutePressureFactor;
+    g_environmentSummary.controlMessageUrgencyFactor = env.controlMessageUrgencyFactor;
+    g_environmentSummary.relayInstabilityFactor = env.relayInstabilityFactor;
+    g_environmentSummary.formationReconfigPenalty = env.formationReconfigPenalty;
+    g_environmentSummary.carrierFrequencyGHz = env.carrierFrequencyGHz;
+    g_environmentSummary.channelBandwidthMHz = env.channelBandwidthMHz;
+    g_environmentSummary.polarizationMode = env.polarizationMode;
+    g_environmentSummary.lakeVolatilityJitterDb = env.lakeVolatilityJitterDb;
+    g_environmentSummary.lakeDeepFadeProbability = env.lakeDeepFadeProbability;
+    g_environmentSummary.lakeDeepFadeMaxDb = env.lakeDeepFadeMaxDb;
+    g_environmentSummary.lakeReflectionDelayJitterMs = env.lakeReflectionDelayJitterMs;
     g_environmentSummary.rxSensitivity = platform.rxSensitivity;
     g_environmentSummary.txPower = platform.txPower;
     g_environmentSummary.noiseFigure = platform.noiseFigure;
@@ -556,6 +984,18 @@ void ApplyScenarioEnvironmentToLegacyState()
     g_environmentSummary.allowRelayReselection = coop.allowRelayReselection;
     g_environmentSummary.allowSlotReallocation = coop.allowSlotReallocation;
     g_environmentSummary.allowRouteRebuild = coop.allowRouteRebuild;
+    g_environmentSummary.nonCooperativeAttackEnabled =
+        g_environmentConfig.nonCooperativeAttackConfig.enabled;
+    g_environmentSummary.nonCooperativeAttackType =
+        NonCooperativeAttackTypeToString(g_environmentConfig.nonCooperativeAttackConfig.attackType);
+    g_environmentSummary.manualStrikeTarget =
+        g_environmentConfig.nonCooperativeAttackConfig.manualStrikeTarget;
+    g_environmentSummary.attackExecuteTime =
+        g_environmentConfig.nonCooperativeAttackConfig.attackExecuteTime;
+    g_environmentSummary.attackEvaluationDuration =
+        g_environmentConfig.nonCooperativeAttackConfig.attackEvaluationDuration;
+    g_environmentSummary.attackNeighborhoodHop =
+        g_environmentConfig.nonCooperativeAttackConfig.attackNeighborhoodHop;
 }
 
 void SetupUavMobility(bool useFormation)
@@ -628,6 +1068,8 @@ void SetupSimulationInfrastructure(bool useFormation,
                                    const std::string& formationName,
                                    const std::string& mapFile,
                                    const CooperativeControlConfig& cooperativeConfig,
+                                   const NonCooperativeAttackConfig& nonCooperativeAttackConfig,
+                                   const SceneRealismOverrides& sceneRealismOverrides,
                                    double customPathLossExp,
                                    double customRxSensitivity,
                                    double customTxPower)
@@ -651,6 +1093,8 @@ void SetupSimulationInfrastructure(bool useFormation,
                                    formationName,
                                    mapFile,
                                    cooperativeConfig,
+                                   nonCooperativeAttackConfig,
+                                   sceneRealismOverrides,
                                    customPathLossExp,
                                    customRxSensitivity,
                                    customTxPower);
@@ -693,12 +1137,17 @@ void SetupSimulationInfrastructure(bool useFormation,
                      "(HybridBuildingsPropagationLossModel)..."
                   << std::endl;
         appendLossModel(CreateObject<HybridBuildingsPropagationLossModel>());
+        if (g_environmentConfig.sceneType == "urban")
+        {
+            appendLossModel(CreateObject<UrbanAltitudeAdaptivePropagationLossModel>());
+        }
     }
     else if (g_environmentConfig.sceneType == "lake")
     {
         std::cout << "🌊 初始化湖面反射传播模型 (TwoRayGroundPropagationLossModel)..."
                   << std::endl;
         appendLossModel(CreateObject<TwoRayGroundPropagationLossModel>());
+        appendLossModel(CreateObject<WaterSurfaceOverlayPropagationLossModel>());
     }
     else
     {

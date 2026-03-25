@@ -434,6 +434,24 @@ def run_simulation_task(task_id, config):
         attack_execute_time = float(config.get("attackExecuteTime", -1.0))
         attack_evaluation_duration = float(config.get("attackEvaluationDuration", 12.0))
         attack_neighborhood_hop = int(config.get("attackNeighborhoodHop", 1))
+        urban_altitude_penalty_db_low = float(config.get("urbanAltitudePenaltyDbLow", -1.0))
+        urban_altitude_gain_db_high = float(config.get("urbanAltitudeGainDbHigh", -1.0))
+        urban_street_canyon_factor = float(config.get("urbanStreetCanyonFactor", -1.0))
+        lake_volatility_jitter_db = float(config.get("lakeVolatilityJitterDb", -1.0))
+        lake_deep_fade_probability = float(config.get("lakeDeepFadeProbability", -1.0))
+        lake_deep_fade_max_db = float(config.get("lakeDeepFadeMaxDb", -1.0))
+        lake_reflection_delay_jitter_ms = float(
+            config.get("lakeReflectionDelayJitterMs", -1.0)
+        )
+        carrier_frequency_ghz = float(config.get("carrierFrequencyGHz", -1.0))
+        channel_bandwidth_mhz = float(config.get("channelBandwidthMHz", -1.0))
+        polarization_mode = config.get("polarizationMode", "")
+        reroute_pressure_factor = float(config.get("reroutePressureFactor", -1.0))
+        control_message_urgency_factor = float(
+            config.get("controlMessageUrgencyFactor", -1.0)
+        )
+        relay_instability_factor = float(config.get("relayInstabilityFactor", -1.0))
+        formation_reconfig_penalty = float(config.get("formationReconfigPenalty", -1.0))
 
         # Custom 参数提取
         custom_params = {}
@@ -495,6 +513,20 @@ def run_simulation_task(task_id, config):
             "attackExecuteTime": attack_execute_time,
             "attackEvaluationDuration": attack_evaluation_duration,
             "attackNeighborhoodHop": attack_neighborhood_hop,
+            "urbanAltitudePenaltyDbLow": urban_altitude_penalty_db_low,
+            "urbanAltitudeGainDbHigh": urban_altitude_gain_db_high,
+            "urbanStreetCanyonFactor": urban_street_canyon_factor,
+            "lakeVolatilityJitterDb": lake_volatility_jitter_db,
+            "lakeDeepFadeProbability": lake_deep_fade_probability,
+            "lakeDeepFadeMaxDb": lake_deep_fade_max_db,
+            "lakeReflectionDelayJitterMs": lake_reflection_delay_jitter_ms,
+            "carrierFrequencyGHz": carrier_frequency_ghz,
+            "channelBandwidthMHz": channel_bandwidth_mhz,
+            "polarizationMode": polarization_mode,
+            "reroutePressureFactor": reroute_pressure_factor,
+            "controlMessageUrgencyFactor": control_message_urgency_factor,
+            "relayInstabilityFactor": relay_instability_factor,
+            "formationReconfigPenalty": formation_reconfig_penalty,
             "custom_params": custom_params  # 将 Custom 参数加入哈希计算
         }
         param_str = json.dumps(hash_params, sort_keys=True)
@@ -570,6 +602,33 @@ def run_simulation_task(task_id, config):
             f"--operationMode={operation_mode}",
             f"--sceneType={scene_type}" if scene_type else None,
             f"--mapFile={os.path.relpath(map_file, NS3_DIR)}" if map_file else None,
+            f"--urbanAltitudePenaltyDbLow={urban_altitude_penalty_db_low}"
+            if urban_altitude_penalty_db_low >= 0.0 else None,
+            f"--urbanAltitudeGainDbHigh={urban_altitude_gain_db_high}"
+            if urban_altitude_gain_db_high >= 0.0 else None,
+            f"--urbanStreetCanyonFactor={urban_street_canyon_factor}"
+            if urban_street_canyon_factor >= 0.0 else None,
+            f"--lakeVolatilityJitterDb={lake_volatility_jitter_db}"
+            if lake_volatility_jitter_db >= 0.0 else None,
+            f"--lakeDeepFadeProbability={lake_deep_fade_probability}"
+            if lake_deep_fade_probability >= 0.0 else None,
+            f"--lakeDeepFadeMaxDb={lake_deep_fade_max_db}"
+            if lake_deep_fade_max_db >= 0.0 else None,
+            f"--lakeReflectionDelayJitterMs={lake_reflection_delay_jitter_ms}"
+            if lake_reflection_delay_jitter_ms >= 0.0 else None,
+            f"--carrierFrequencyGHz={carrier_frequency_ghz}"
+            if carrier_frequency_ghz > 0.0 else None,
+            f"--channelBandwidthMHz={channel_bandwidth_mhz}"
+            if channel_bandwidth_mhz > 0.0 else None,
+            f"--polarizationMode={polarization_mode}" if polarization_mode else None,
+            f"--reroutePressureFactor={reroute_pressure_factor}"
+            if reroute_pressure_factor >= 0.0 else None,
+            f"--controlMessageUrgencyFactor={control_message_urgency_factor}"
+            if control_message_urgency_factor >= 0.0 else None,
+            f"--relayInstabilityFactor={relay_instability_factor}"
+            if relay_instability_factor >= 0.0 else None,
+            f"--formationReconfigPenalty={formation_reconfig_penalty}"
+            if formation_reconfig_penalty >= 0.0 else None,
         ]
 
         if operation_mode == "cooperative":

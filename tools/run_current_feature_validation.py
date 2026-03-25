@@ -95,6 +95,26 @@ class RunSpec:
     allow_slot_reallocation: bool = True
     allow_route_rebuild: bool = True
     expect_leader_failover: bool = False
+    enable_non_cooperative_attack: bool = False
+    attack_type: str = "node_strike"
+    manual_strike_target: int = -1
+    attack_execute_time: Optional[float] = None
+    attack_evaluation_duration: float = 12.0
+    attack_neighborhood_hop: int = 1
+    urban_altitude_penalty_db_low: Optional[float] = None
+    urban_altitude_gain_db_high: Optional[float] = None
+    urban_street_canyon_factor: Optional[float] = None
+    lake_volatility_jitter_db: Optional[float] = None
+    lake_deep_fade_probability: Optional[float] = None
+    lake_deep_fade_max_db: Optional[float] = None
+    lake_reflection_delay_jitter_ms: Optional[float] = None
+    carrier_frequency_ghz: Optional[float] = None
+    channel_bandwidth_mhz: Optional[float] = None
+    polarization_mode: Optional[str] = None
+    reroute_pressure_factor: Optional[float] = None
+    control_message_urgency_factor: Optional[float] = None
+    relay_instability_factor: Optional[float] = None
+    formation_reconfig_penalty: Optional[float] = None
 
 
 def bool_arg(value: bool) -> str:
@@ -230,6 +250,58 @@ def annotate_cooperative_events(
             ax.axvline(action_time, color="#16a085", linestyle=":", alpha=0.28, linewidth=1.1)
 
 
+def plot_state_series(
+    ax: plt.Axes,
+    time_values: pd.Series,
+    state_values: pd.Series,
+    *,
+    color: str,
+    label: str,
+    linestyle: str = "-",
+    linewidth: float = 1.5,
+    marker_size: float = 18.0,
+) -> None:
+    cleaned = pd.DataFrame({"time": time_values, "value": state_values}).dropna()
+    if cleaned.empty:
+        return
+
+    ax.step(
+        cleaned["time"],
+        cleaned["value"],
+        where="post",
+        color=color,
+        linestyle=linestyle,
+        linewidth=linewidth,
+        label=label,
+    )
+
+    changed_mask = cleaned["value"].ne(cleaned["value"].shift(1))
+    changed_points = cleaned.loc[changed_mask]
+    ax.scatter(
+        changed_points["time"],
+        changed_points["value"],
+        color=color,
+        s=marker_size,
+        zorder=4,
+        alpha=0.9,
+    )
+
+
+def annotate_attack_phases(ax: plt.Axes, global_df: pd.DataFrame) -> None:
+    if global_df.empty or "phase" not in global_df.columns or "time" not in global_df.columns:
+        return
+
+    phase_colors = {
+        "pre_attack": "#dfe6e9",
+        "immediate_post_attack": "#fdecea",
+        "recovery": "#e8f7ef",
+        "final": "#e8f1fd",
+    }
+
+    for start, end, phase in phase_segments(global_df):
+        ax.axvspan(start, end, color=phase_colors.get(phase, "#f3f4f6"), alpha=0.10, linewidth=0)
+
+
 def build_run_specs(
     duration: float,
     difficulty: str,
@@ -304,6 +376,110 @@ def build_run_specs(
             )
         )
 
+    attack_eval_duration = max(4.0, round(min(8.0, duration * 0.20), 2))
+    attack_execute_time = round(max(duration * 0.55, duration - attack_eval_duration - 1.0), 2)
+    attack_scenes = ["urban", "open-field"] if preset == "quick" else scenes
+    for scene in attack_scenes:
+        runs.append(
+            RunSpec(
+                name=f"noncooperative_attack_{scene}",
+                operation_mode="non_cooperative",
+                scene_type=scene,
+                difficulty=difficulty,
+                formation=formation,
+                duration=duration,
+                num_uavs=num_uavs,
+                num_channels=num_channels,
+                strategy=strategy,
+                map_file=SCENE_MAP_FILES.get(scene),
+                enable_non_cooperative_attack=True,
+                manual_strike_target=-1,
+                attack_execute_time=attack_execute_time,
+                attack_evaluation_duration=attack_eval_duration,
+                attack_neighborhood_hop=1,
+            )
+        )
+
+    if preset != "quick":
+        runs.extend(
+            [
+                RunSpec(
+                    name="realism_urban_altitude_profile",
+                    operation_mode="cooperative",
+                    communication_mode="centralized",
+                    scene_type="urban",
+                    difficulty=difficulty,
+                    formation=formation,
+                    duration=duration,
+                    num_uavs=num_uavs,
+                    num_channels=num_channels,
+                    strategy=strategy,
+                    map_file=SCENE_MAP_FILES.get("urban"),
+                    failure_start_time=failure_start,
+                    failure_duration=failure_duration,
+                    urban_altitude_penalty_db_low=8.0,
+                    urban_altitude_gain_db_high=7.0,
+                    urban_street_canyon_factor=1.1,
+                ),
+                RunSpec(
+                    name="realism_forest_radio_profile",
+                    operation_mode="cooperative",
+                    communication_mode="centralized",
+                    scene_type="forest",
+                    difficulty=difficulty,
+                    formation=formation,
+                    duration=duration,
+                    num_uavs=num_uavs,
+                    num_channels=num_channels,
+                    strategy=strategy,
+                    map_file=SCENE_MAP_FILES.get("forest"),
+                    failure_start_time=failure_start,
+                    failure_duration=failure_duration,
+                    carrier_frequency_ghz=2.4,
+                    channel_bandwidth_mhz=10.0,
+                    polarization_mode="horizontal",
+                ),
+                RunSpec(
+                    name="realism_lake_volatility_profile",
+                    operation_mode="cooperative",
+                    communication_mode="centralized",
+                    scene_type="lake",
+                    difficulty=difficulty,
+                    formation=formation,
+                    duration=duration,
+                    num_uavs=num_uavs,
+                    num_channels=num_channels,
+                    strategy=strategy,
+                    map_file=SCENE_MAP_FILES.get("lake"),
+                    failure_start_time=failure_start,
+                    failure_duration=failure_duration,
+                    lake_volatility_jitter_db=5.0,
+                    lake_deep_fade_probability=0.2,
+                    lake_deep_fade_max_db=9.0,
+                    lake_reflection_delay_jitter_ms=20.0,
+                ),
+                RunSpec(
+                    name="realism_open_field_pressure_profile",
+                    operation_mode="cooperative",
+                    communication_mode="centralized",
+                    scene_type="open-field",
+                    difficulty=difficulty,
+                    formation=formation,
+                    duration=duration,
+                    num_uavs=num_uavs,
+                    num_channels=num_channels,
+                    strategy=strategy,
+                    map_file=SCENE_MAP_FILES.get("open-field"),
+                    failure_start_time=failure_start,
+                    failure_duration=failure_duration,
+                    reroute_pressure_factor=1.8,
+                    control_message_urgency_factor=1.4,
+                    relay_instability_factor=1.3,
+                    formation_reconfig_penalty=1.2,
+                ),
+            ]
+        )
+
     return runs
 
 
@@ -327,6 +503,36 @@ def build_ns3_command(spec: RunSpec, output_dir: Path) -> str:
     ]
     if spec.map_file:
         args.append(f"--mapFile={spec.map_file}")
+    if spec.urban_altitude_penalty_db_low is not None:
+        args.append(f"--urbanAltitudePenaltyDbLow={spec.urban_altitude_penalty_db_low}")
+    if spec.urban_altitude_gain_db_high is not None:
+        args.append(f"--urbanAltitudeGainDbHigh={spec.urban_altitude_gain_db_high}")
+    if spec.urban_street_canyon_factor is not None:
+        args.append(f"--urbanStreetCanyonFactor={spec.urban_street_canyon_factor}")
+    if spec.lake_volatility_jitter_db is not None:
+        args.append(f"--lakeVolatilityJitterDb={spec.lake_volatility_jitter_db}")
+    if spec.lake_deep_fade_probability is not None:
+        args.append(f"--lakeDeepFadeProbability={spec.lake_deep_fade_probability}")
+    if spec.lake_deep_fade_max_db is not None:
+        args.append(f"--lakeDeepFadeMaxDb={spec.lake_deep_fade_max_db}")
+    if spec.lake_reflection_delay_jitter_ms is not None:
+        args.append(f"--lakeReflectionDelayJitterMs={spec.lake_reflection_delay_jitter_ms}")
+    if spec.carrier_frequency_ghz is not None:
+        args.append(f"--carrierFrequencyGHz={spec.carrier_frequency_ghz}")
+    if spec.channel_bandwidth_mhz is not None:
+        args.append(f"--channelBandwidthMHz={spec.channel_bandwidth_mhz}")
+    if spec.polarization_mode:
+        args.append(f"--polarizationMode={spec.polarization_mode}")
+    if spec.reroute_pressure_factor is not None:
+        args.append(f"--reroutePressureFactor={spec.reroute_pressure_factor}")
+    if spec.control_message_urgency_factor is not None:
+        args.append(
+            f"--controlMessageUrgencyFactor={spec.control_message_urgency_factor}"
+        )
+    if spec.relay_instability_factor is not None:
+        args.append(f"--relayInstabilityFactor={spec.relay_instability_factor}")
+    if spec.formation_reconfig_penalty is not None:
+        args.append(f"--formationReconfigPenalty={spec.formation_reconfig_penalty}")
 
     if spec.operation_mode == "cooperative":
         args.extend(
@@ -350,6 +556,17 @@ def build_ns3_command(spec: RunSpec, output_dir: Path) -> str:
                 f"--allowRouteRebuild={bool_arg(spec.allow_route_rebuild)}",
             ]
         )
+    elif spec.enable_non_cooperative_attack:
+        args.extend(
+            [
+                "--enableNonCooperativeAttack=true",
+                f"--attackType={spec.attack_type}",
+                f"--manualStrikeTarget={spec.manual_strike_target}",
+                f"--attackExecuteTime={spec.attack_execute_time}",
+                f"--attackEvaluationDuration={spec.attack_evaluation_duration}",
+                f"--attackNeighborhoodHop={spec.attack_neighborhood_hop}",
+            ]
+        )
 
     return " ".join(args)
 
@@ -365,6 +582,69 @@ def run_checked(cmd: Sequence[str], cwd: Path, log_path: Path) -> None:
         )
     if process.returncode != 0:
         raise RuntimeError(f"命令执行失败: {' '.join(cmd)}，详见 {log_path}")
+
+
+def pick_recommended_strike_target(
+    recommendations: pd.DataFrame, attack_execute_time: Optional[float]
+) -> Optional[int]:
+    if recommendations.empty or "recommendedObservedNodeId" not in recommendations.columns:
+        return None
+
+    ranked = recommendations.copy()
+    ranked = coerce_numeric(
+        ranked,
+        ["windowStart", "windowEnd", "recommendedObservedNodeId", "recommendedScore", "recommendationRank"],
+    )
+    if "recommendationRank" in ranked.columns:
+        top_rank = ranked.loc[ranked["recommendationRank"] == 1].copy()
+        if not top_rank.empty:
+            ranked = top_rank
+
+    ranked = ranked.dropna(subset=["recommendedObservedNodeId"])
+    if ranked.empty:
+        return None
+
+    time_col = "windowEnd" if "windowEnd" in ranked.columns else "windowStart"
+    if attack_execute_time is not None and time_col in ranked.columns:
+        prior = ranked.loc[ranked[time_col] <= attack_execute_time + 1e-6].copy()
+        if prior.empty:
+            return None
+        ranked = prior
+
+    sort_cols = [col for col in [time_col, "recommendedScore"] if col in ranked.columns]
+    if sort_cols:
+        ranked = ranked.sort_values(sort_cols)
+
+    try:
+        return int(ranked.iloc[-1]["recommendedObservedNodeId"])
+    except (TypeError, ValueError):
+        return None
+
+
+def resolve_noncooperative_attack_target(spec: RunSpec, probe_dir: Path) -> int:
+    probe_spec = RunSpec(**asdict(spec))
+    probe_spec.manual_strike_target = -1
+
+    if probe_dir.exists():
+        shutil.rmtree(probe_dir)
+    probe_dir.mkdir(parents=True, exist_ok=True)
+
+    (probe_dir / "run_spec.json").write_text(
+        json.dumps(asdict(probe_spec), ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    probe_command = build_ns3_command(probe_spec, probe_dir)
+    probe_log = probe_dir / "simulation.log"
+    run_checked([str(NS3_BINARY), "run", probe_command, "--no-build"], ROOT, probe_log)
+
+    recommendations = ensure_csv(probe_dir / "noncooperative_attack_recommendations.csv")
+    target = pick_recommended_strike_target(recommendations, probe_spec.attack_execute_time)
+    if target is None or target < 0:
+        raise RuntimeError(
+            "预探测未能解析出有效的非合作打击目标，详见 "
+            f"{probe_dir / 'noncooperative_attack_recommendations.csv'}"
+        )
+    return target
 
 
 def build_ns3(skip_build: bool, output_root: Path) -> None:
@@ -385,10 +665,38 @@ def run_one_spec(spec: RunSpec, runs_root: Path) -> Tuple[Path, Optional[str]]:
         shutil.rmtree(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    config_path = run_dir / "run_spec.json"
-    config_path.write_text(json.dumps(asdict(spec), ensure_ascii=False, indent=2), encoding="utf-8")
+    effective_spec = RunSpec(**asdict(spec))
+    if (
+        effective_spec.enable_non_cooperative_attack
+        and effective_spec.attack_execute_time is not None
+        and effective_spec.manual_strike_target < 0
+    ):
+        try:
+            resolved_target = resolve_noncooperative_attack_target(
+                effective_spec, run_dir / "_preflight"
+            )
+            effective_spec.manual_strike_target = resolved_target
+            (run_dir / "resolved_attack_target.json").write_text(
+                json.dumps(
+                    {
+                        "attackExecuteTime": effective_spec.attack_execute_time,
+                        "resolvedObservedNodeId": resolved_target,
+                        "resolutionMode": "preflight_latest_recommendation",
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            return run_dir, str(exc)
 
-    command = build_ns3_command(spec, run_dir)
+    config_path = run_dir / "run_spec.json"
+    config_path.write_text(
+        json.dumps(asdict(effective_spec), ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    command = build_ns3_command(effective_spec, run_dir)
     log_path = run_dir / "simulation.log"
 
     try:
@@ -577,6 +885,7 @@ def summarize_cooperative_run(spec: RunSpec, run_dir: Path, error: Optional[str]
 
     return {
         "run_name": spec.name,
+        "is_realism_profile": spec.name.startswith("realism_"),
         "category": "cooperative",
         "operation_mode": spec.operation_mode,
         "communication_mode": spec.communication_mode,
@@ -645,6 +954,20 @@ def summarize_cooperative_run(spec: RunSpec, run_dir: Path, error: Optional[str]
         "error": error or "",
         "environment_source": env.get("environmentSource"),
         "effective_model_summary": env.get("effectiveModelSummary"),
+        "carrier_frequency_ghz": env.get("carrierFrequencyGHz"),
+        "channel_bandwidth_mhz": env.get("channelBandwidthMHz"),
+        "polarization_mode": env.get("polarizationMode"),
+        "urban_altitude_penalty_db_low": env.get("urbanAltitudePenaltyDbLow"),
+        "urban_altitude_gain_db_high": env.get("urbanAltitudeGainDbHigh"),
+        "urban_street_canyon_factor": env.get("urbanStreetCanyonFactor"),
+        "lake_volatility_jitter_db": env.get("lakeVolatilityJitterDb"),
+        "lake_deep_fade_probability": env.get("lakeDeepFadeProbability"),
+        "lake_deep_fade_max_db": env.get("lakeDeepFadeMaxDb"),
+        "lake_reflection_delay_jitter_ms": env.get("lakeReflectionDelayJitterMs"),
+        "reroute_pressure_factor": env.get("reroutePressureFactor"),
+        "control_message_urgency_factor": env.get("controlMessageUrgencyFactor"),
+        "relay_instability_factor": env.get("relayInstabilityFactor"),
+        "formation_reconfig_penalty": env.get("formationReconfigPenalty"),
     }
 
 
@@ -731,6 +1054,7 @@ def summarize_noncooperative_run(spec: RunSpec, run_dir: Path, error: Optional[s
 
     return {
         "run_name": spec.name,
+        "is_realism_profile": spec.name.startswith("realism_"),
         "category": "non_cooperative",
         "operation_mode": spec.operation_mode,
         "communication_mode": "",
@@ -757,6 +1081,219 @@ def summarize_noncooperative_run(spec: RunSpec, run_dir: Path, error: Optional[s
         "error": error or "",
         "environment_source": env.get("environmentSource"),
         "effective_model_summary": env.get("effectiveModelSummary"),
+        "carrier_frequency_ghz": env.get("carrierFrequencyGHz"),
+        "channel_bandwidth_mhz": env.get("channelBandwidthMHz"),
+        "polarization_mode": env.get("polarizationMode"),
+        "urban_altitude_penalty_db_low": env.get("urbanAltitudePenaltyDbLow"),
+        "urban_altitude_gain_db_high": env.get("urbanAltitudeGainDbHigh"),
+        "urban_street_canyon_factor": env.get("urbanStreetCanyonFactor"),
+        "lake_volatility_jitter_db": env.get("lakeVolatilityJitterDb"),
+        "lake_deep_fade_probability": env.get("lakeDeepFadeProbability"),
+        "lake_deep_fade_max_db": env.get("lakeDeepFadeMaxDb"),
+        "lake_reflection_delay_jitter_ms": env.get("lakeReflectionDelayJitterMs"),
+        "reroute_pressure_factor": env.get("reroutePressureFactor"),
+        "control_message_urgency_factor": env.get("controlMessageUrgencyFactor"),
+        "relay_instability_factor": env.get("relayInstabilityFactor"),
+        "formation_reconfig_penalty": env.get("formationReconfigPenalty"),
+    }
+
+
+def summarize_noncooperative_attack_run(spec: RunSpec, run_dir: Path, error: Optional[str]) -> Dict:
+    env = ensure_json(run_dir / "environment_summary.json")
+    attack_plan = ensure_json(run_dir / "noncooperative_attack_plan.json")
+    pre_post = ensure_json(run_dir / "noncooperative_pre_post_comparison.json")
+    recommendations = coerce_numeric(
+        ensure_csv(run_dir / "noncooperative_attack_recommendations.csv"),
+        [
+            "windowStart",
+            "windowEnd",
+            "recommendedObservedNodeId",
+            "recommendedScore",
+            "recommendationRank",
+        ],
+    )
+    if recommendations.empty:
+        recommendations = coerce_numeric(
+            ensure_csv(run_dir / "_preflight" / "noncooperative_attack_recommendations.csv"),
+            [
+                "windowStart",
+                "windowEnd",
+                "recommendedObservedNodeId",
+                "recommendedScore",
+                "recommendationRank",
+            ],
+        )
+    bindings = coerce_numeric(
+        ensure_csv(run_dir / "noncooperative_target_binding.csv"),
+        [
+            "eventTime",
+            "observedNodeId",
+            "bindingConfidence",
+            "boundTargetObjectKey",
+            "executedEntityNodeId",
+            "isTrackStable",
+            "isTrackActive",
+            "isTrueCriticalTarget",
+        ],
+    )
+    events = coerce_numeric(
+        ensure_csv(run_dir / "noncooperative_attack_events.csv"),
+        [
+            "eventTime",
+            "recommendedObservedNodeId",
+            "confirmedObservedNodeId",
+            "executedObservedNodeId",
+            "isTrueTargetHit",
+            "nodeRemoved",
+            "executedEntityNodeId",
+            "boundTargetObjectKey",
+        ],
+    )
+    effect_metrics = coerce_numeric(
+        ensure_csv(run_dir / "noncooperative_attack_effect_metrics.csv"),
+        [
+            "time",
+            "connectivityRatio",
+            "pdr",
+            "throughputMbps",
+            "delayMs",
+            "damageDuration",
+            "recoveryProgress",
+            "recommendedObservedNodeId",
+            "confirmedObservedNodeId",
+            "executedObservedNodeId",
+        ],
+    )
+
+    files_ok = all(
+        (run_dir / name).exists()
+        for name in [
+            "environment_summary.json",
+            "noncooperative_attack_recommendations.csv",
+            "noncooperative_attack_plan.json",
+            "noncooperative_attack_events.csv",
+            "noncooperative_target_binding.csv",
+            "noncooperative_attack_effect_metrics.csv",
+            "noncooperative_pre_post_comparison.json",
+        ]
+    )
+
+    def phase_scope_avg(phase: str, scope: str, col: str) -> float:
+        if effect_metrics.empty or "phase" not in effect_metrics.columns or "targetScope" not in effect_metrics.columns:
+            return math.nan
+        series = effect_metrics.loc[
+            (effect_metrics["phase"] == phase) & (effect_metrics["targetScope"] == scope), col
+        ].dropna()
+        return float(series.mean()) if not series.empty else math.nan
+
+    pre_global_connectivity = phase_scope_avg("pre_attack", "global", "connectivityRatio")
+    post_global_connectivity = phase_scope_avg("immediate_post_attack", "global", "connectivityRatio")
+    pre_global_pdr = phase_scope_avg("pre_attack", "global", "pdr")
+    post_global_pdr = phase_scope_avg("immediate_post_attack", "global", "pdr")
+    pre_global_throughput = phase_scope_avg("pre_attack", "global", "throughputMbps")
+    post_global_throughput = phase_scope_avg("immediate_post_attack", "global", "throughputMbps")
+    pre_global_delay = phase_scope_avg("pre_attack", "global", "delayMs")
+    post_global_delay = phase_scope_avg("immediate_post_attack", "global", "delayMs")
+    pre_local_connectivity = phase_scope_avg("pre_attack", "target_neighborhood", "connectivityRatio")
+    post_local_connectivity = phase_scope_avg("immediate_post_attack", "target_neighborhood", "connectivityRatio")
+    pre_local_pdr = phase_scope_avg("pre_attack", "target_neighborhood", "pdr")
+    post_local_pdr = phase_scope_avg("immediate_post_attack", "target_neighborhood", "pdr")
+    pre_local_delay = phase_scope_avg("pre_attack", "target_neighborhood", "delayMs")
+    post_local_delay = phase_scope_avg("immediate_post_attack", "target_neighborhood", "delayMs")
+
+    recovery_summary = pre_post.get("recoverySummary", {})
+    validation_notes: List[str] = []
+    validation_state = "PASS"
+    if error:
+        validation_state = "FAIL"
+        validation_notes.append(error)
+    if not files_ok:
+        validation_state = "FAIL"
+        validation_notes.append("非合作打击核心输出文件缺失")
+    if recommendations.empty:
+        validation_state = "FAIL"
+        validation_notes.append("没有生成打击推荐结果")
+    if bindings.empty:
+        validation_state = "FAIL"
+        validation_notes.append("没有生成目标绑定记录")
+    if events.empty:
+        validation_state = "FAIL"
+        validation_notes.append("没有生成打击事件")
+    if effect_metrics.empty:
+        validation_state = "FAIL"
+        validation_notes.append("没有生成打击效果指标")
+
+    node_removed = bool(pd.to_numeric(events.get("nodeRemoved"), errors="coerce").fillna(0).max()) if not events.empty and "nodeRemoved" in events.columns else False
+    if validation_state == "PASS" and not node_removed:
+        validation_state = "WARN"
+        validation_notes.append("打击事件已记录，但节点未成功移除")
+
+    return {
+        "run_name": spec.name,
+        "is_realism_profile": spec.name.startswith("realism_"),
+        "category": "non_cooperative_attack",
+        "operation_mode": spec.operation_mode,
+        "communication_mode": "",
+        "scene_type": spec.scene_type,
+        "difficulty": spec.difficulty,
+        "formation": spec.formation,
+        "duration": spec.duration,
+        "map_file": spec.map_file or "",
+        "validation_state": validation_state,
+        "validation_notes": " | ".join(validation_notes),
+        "files_ok": files_ok,
+        "recommendation_count": int(len(recommendations)),
+        "binding_count": int(len(bindings)),
+        "attack_event_count": int(len(events)),
+        "effect_metric_count": int(len(effect_metrics)),
+        "recommended_observed_node_id": attack_plan.get("recommendedObservedNodeId"),
+        "confirmed_observed_node_id": attack_plan.get("confirmedObservedNodeId"),
+        "executed_observed_node_id": attack_plan.get("executedObservedNodeId"),
+        "executed_entity_node_id": attack_plan.get("executedEntityNodeId"),
+        "target_binding_status": attack_plan.get("targetBindingStatus"),
+        "attack_executed": recovery_summary.get("attackExecuted"),
+        "attack_execute_time": attack_plan.get("strikeExecuteTime"),
+        "recovery_completed_at": recovery_summary.get("recoveryCompletedAt"),
+        "target_neighborhood_size": recovery_summary.get("targetNeighborhoodSize"),
+        "pre_attack_global_connectivity": pre_global_connectivity,
+        "post_attack_global_connectivity": post_global_connectivity,
+        "global_connectivity_delta": post_global_connectivity - pre_global_connectivity,
+        "pre_attack_global_pdr": pre_global_pdr,
+        "post_attack_global_pdr": post_global_pdr,
+        "global_pdr_delta": post_global_pdr - pre_global_pdr,
+        "pre_attack_global_throughput_mbps": pre_global_throughput,
+        "post_attack_global_throughput_mbps": post_global_throughput,
+        "global_throughput_delta_mbps": post_global_throughput - pre_global_throughput,
+        "pre_attack_global_delay_ms": pre_global_delay,
+        "post_attack_global_delay_ms": post_global_delay,
+        "global_delay_delta_ms": post_global_delay - pre_global_delay,
+        "pre_attack_local_connectivity": pre_local_connectivity,
+        "post_attack_local_connectivity": post_local_connectivity,
+        "local_connectivity_delta": post_local_connectivity - pre_local_connectivity,
+        "pre_attack_local_pdr": pre_local_pdr,
+        "post_attack_local_pdr": post_local_pdr,
+        "local_pdr_delta": post_local_pdr - pre_local_pdr,
+        "pre_attack_local_delay_ms": pre_local_delay,
+        "post_attack_local_delay_ms": post_local_delay,
+        "local_delay_delta_ms": post_local_delay - pre_local_delay,
+        "output_dir": str(run_dir.relative_to(ROOT)),
+        "error": error or "",
+        "environment_source": env.get("environmentSource"),
+        "effective_model_summary": env.get("effectiveModelSummary"),
+        "carrier_frequency_ghz": env.get("carrierFrequencyGHz"),
+        "channel_bandwidth_mhz": env.get("channelBandwidthMHz"),
+        "polarization_mode": env.get("polarizationMode"),
+        "urban_altitude_penalty_db_low": env.get("urbanAltitudePenaltyDbLow"),
+        "urban_altitude_gain_db_high": env.get("urbanAltitudeGainDbHigh"),
+        "urban_street_canyon_factor": env.get("urbanStreetCanyonFactor"),
+        "lake_volatility_jitter_db": env.get("lakeVolatilityJitterDb"),
+        "lake_deep_fade_probability": env.get("lakeDeepFadeProbability"),
+        "lake_deep_fade_max_db": env.get("lakeDeepFadeMaxDb"),
+        "lake_reflection_delay_jitter_ms": env.get("lakeReflectionDelayJitterMs"),
+        "reroute_pressure_factor": env.get("reroutePressureFactor"),
+        "control_message_urgency_factor": env.get("controlMessageUrgencyFactor"),
+        "relay_instability_factor": env.get("relayInstabilityFactor"),
+        "formation_reconfig_penalty": env.get("formationReconfigPenalty"),
     }
 
 
@@ -809,6 +1346,62 @@ def plot_cooperative_summary(coop_df: pd.DataFrame, plots_dir: Path) -> List[str
     return [output.name]
 
 
+def plot_cooperative_impact_summary(coop_df: pd.DataFrame, plots_dir: Path) -> List[str]:
+    if coop_df.empty:
+        return []
+
+    ordered = coop_df.copy()
+    ordered["scene_type"] = pd.Categorical(ordered["scene_type"], SCENES, ordered=True)
+    ordered["communication_mode"] = pd.Categorical(
+        ordered["communication_mode"], COOP_MODES, ordered=True
+    )
+    ordered = ordered.sort_values(["scene_type", "communication_mode"])
+
+    metrics = [
+        ("during_failure_local_pdr", "故障邻域 PDR"),
+        ("during_failure_target_pdr", "故障目标 PDR"),
+        ("during_failure_local_delay_ms", "故障邻域时延 (ms)"),
+        ("during_failure_target_delay_ms", "故障目标时延 (ms)"),
+        ("local_pdr_delta_during", "故障邻域 PDR Δ"),
+        ("target_pdr_delta_during", "故障目标 PDR Δ"),
+        ("local_delay_delta_during_ms", "故障邻域时延 Δ"),
+        ("target_delay_delta_during_ms", "故障目标时延 Δ"),
+    ]
+    fig, axes = plt.subplots(len(metrics), 1, figsize=(15, 24), sharex=True)
+
+    x_labels = [
+        f"{scene}\n{mode}"
+        for scene, mode in zip(
+            ordered["scene_type"].astype(str), ordered["communication_mode"].astype(str)
+        )
+    ]
+    x = np.arange(len(x_labels))
+    colors = ordered["validation_state"].map(
+        {"PASS": "#2ecc71", "WARN": "#f1c40f", "FAIL": "#e74c3c"}
+    )
+
+    for ax, (col, title) in zip(axes, metrics):
+        values = (
+            pd.to_numeric(ordered[col], errors="coerce")
+            if col in ordered.columns
+            else pd.Series([math.nan] * len(ordered))
+        )
+        ax.bar(x, values, color=colors)
+        ax.set_title(title)
+        ax.grid(True, axis="y", alpha=0.25)
+        if "Δ" in title:
+            ax.axhline(0.0, color="#6b7280", linewidth=0.8, linestyle="--")
+
+    axes[-1].set_xticks(x)
+    axes[-1].set_xticklabels(x_labels, rotation=45, ha="right")
+    plt.tight_layout()
+
+    output = plots_dir / "cooperative_impact_summary.png"
+    plt.savefig(output, dpi=180, bbox_inches="tight")
+    plt.close(fig)
+    return [output.name]
+
+
 def plot_cooperative_delta_heatmap(coop_df: pd.DataFrame, plots_dir: Path) -> List[str]:
     if coop_df.empty:
         return []
@@ -826,6 +1419,10 @@ def plot_cooperative_delta_heatmap(coop_df: pd.DataFrame, plots_dir: Path) -> Li
         ("throughput_delta_during_mbps", "Thr Δ"),
         ("delay_delta_during_ms", "Delay Δ"),
         ("p99_delay_delta_during_ms", "P99 Δ"),
+        ("local_pdr_delta_during", "Local PDR Δ"),
+        ("local_delay_delta_during_ms", "Local Delay Δ"),
+        ("target_pdr_delta_during", "Target PDR Δ"),
+        ("target_delay_delta_during_ms", "Target Delay Δ"),
     ]
     matrix = []
     for _, row in ordered.iterrows():
@@ -1037,44 +1634,45 @@ def plot_cooperative_timelines(coop_df: pd.DataFrame, runs_root: Path, plots_dir
         axes[3].grid(True, alpha=0.25)
         axes[3].legend(loc="upper right", ncol=3, fontsize=8)
 
-        axes[4].step(
+        plot_state_series(
+            axes[4],
             df["time"],
             df["leaderNodeId"],
-            where="post",
             color="#8e44ad",
-            linewidth=1.6,
             label="Leader Node",
+            linewidth=1.6,
         )
         leader_alive = df["isLeaderAlive"].map(lambda x: 1 if bool(x) else 0)
-        axes[4].step(
+        plot_state_series(
+            axes[4],
             df["time"],
             leader_alive,
-            where="post",
             color="#c0392b",
-            linewidth=1.2,
-            linestyle="--",
             label="Leader Alive (0/1)",
+            linestyle="--",
+            linewidth=1.2,
         )
-        axes[4].step(
+        plot_state_series(
+            axes[4],
             df["time"],
             df["activeNodeCount"],
-            where="post",
             color="#2c3e50",
-            linewidth=1.1,
-            linestyle=":",
             label="Active Nodes",
+            linestyle=":",
+            linewidth=1.1,
         )
         if "failureNeighborhoodNodeCount" in df.columns:
-            axes[4].step(
+            plot_state_series(
+                axes[4],
                 df["time"],
                 df["failureNeighborhoodNodeCount"],
-                where="post",
                 color="#f39c12",
-                linewidth=1.1,
+                label="Frozen Neighborhood Size",
                 linestyle="-.",
-                label="Neighborhood Nodes",
+                linewidth=1.1,
             )
-        axes[4].set_ylabel("Leader / Alive / Scope")
+        axes[4].set_ylabel("State / Count")
+        axes[4].set_title("离散状态量：Leader / 存活 / 冻结邻域", fontsize=10)
         axes[4].grid(True, alpha=0.25)
         axes[4].legend(loc="upper right", ncol=4, fontsize=8)
 
@@ -1083,13 +1681,13 @@ def plot_cooperative_timelines(coop_df: pd.DataFrame, runs_root: Path, plots_dir
             target_df = resource_df[resource_df["node_id"] == int(target_node_id)].copy()
 
         if not target_df.empty:
-            axes[5].step(
+            plot_state_series(
+                axes[5],
                 target_df["time"],
                 target_df["neighbors"],
-                where="post",
                 color="#e67e22",
-                linewidth=1.6,
                 label="Target Neighbors",
+                linewidth=1.6,
             )
             ax4b = axes[5].twinx()
             ax4b.plot(
@@ -1105,13 +1703,13 @@ def plot_cooperative_timelines(coop_df: pd.DataFrame, runs_root: Path, plots_dir
             axes[5].grid(True, alpha=0.25)
             axes[5].set_title(f"Failure Target Node {target_node_id} Local State", fontsize=10)
 
-            axes[6].step(
+            plot_state_series(
+                axes[6],
                 target_df["time"],
                 target_df["channel"],
-                where="post",
                 color="#2980b9",
-                linewidth=1.5,
                 label="Channel",
+                linewidth=1.5,
             )
             axes[6].plot(
                 target_df["time"],
@@ -1157,6 +1755,46 @@ def plot_cooperative_timelines(coop_df: pd.DataFrame, runs_root: Path, plots_dir
         generated.append(name)
 
     return generated
+
+
+def plot_scene_realism_profiles(all_df: pd.DataFrame, plots_dir: Path) -> List[str]:
+    if all_df.empty or "is_realism_profile" not in all_df.columns:
+        return []
+
+    realism_df = all_df.loc[all_df["is_realism_profile"] == True].copy()  # noqa: E712
+    if realism_df.empty:
+        return []
+
+    metrics = [
+        ("connectivity_end", "最终连通率"),
+        ("pdr_end", "最终 PDR"),
+        ("delay_end_ms", "最终平均时延 (ms)"),
+    ]
+
+    fig, axes = plt.subplots(len(metrics), 1, figsize=(13, 12), sharex=True)
+    if len(metrics) == 1:
+        axes = [axes]
+
+    x = np.arange(len(realism_df))
+    labels = realism_df["run_name"].tolist()
+    colors = ["#2E86AB", "#F18F01", "#C73E1D", "#6C9A8B"]
+
+    for idx, (metric, title) in enumerate(metrics):
+        ax = axes[idx]
+        vals = pd.to_numeric(realism_df[metric], errors="coerce").fillna(0.0)
+        ax.bar(x, vals, color=colors[idx % len(colors)], alpha=0.88)
+        ax.set_ylabel(title)
+        ax.grid(True, alpha=0.25, linestyle="--")
+
+    axes[-1].set_xticks(x)
+    axes[-1].set_xticklabels(labels, rotation=20, ha="right")
+    axes[0].set_title("场景真实性专项验证")
+
+    output = plots_dir / "scene_realism_profiles.png"
+    fig.tight_layout()
+    fig.savefig(output, dpi=160)
+    plt.close(fig)
+    return [output.name]
 
 
 def plot_noncooperative_summary(non_df: pd.DataFrame, plots_dir: Path) -> List[str]:
@@ -1393,10 +2031,153 @@ def plot_noncooperative_timelines(non_df: pd.DataFrame, plots_dir: Path) -> List
     return generated
 
 
+def plot_noncooperative_attack_summary(attack_df: pd.DataFrame, plots_dir: Path) -> List[str]:
+    if attack_df.empty:
+        return []
+
+    ordered = attack_df.copy()
+    ordered["scene_type"] = pd.Categorical(ordered["scene_type"], SCENES, ordered=True)
+    ordered = ordered.sort_values("scene_type")
+
+    metrics = [
+        ("global_connectivity_delta", "全网连通率 Δ"),
+        ("global_pdr_delta", "全网 PDR Δ"),
+        ("global_delay_delta_ms", "全网时延 Δ (ms)"),
+        ("local_connectivity_delta", "目标邻域连通率 Δ"),
+        ("local_pdr_delta", "目标邻域 PDR Δ"),
+        ("local_delay_delta_ms", "目标邻域时延 Δ (ms)"),
+    ]
+    fig, axes = plt.subplots(len(metrics), 1, figsize=(12, 18), sharex=True)
+    x = np.arange(len(ordered))
+    labels = ordered["scene_type"].astype(str).tolist()
+    colors = ordered["validation_state"].map(
+        {"PASS": "#2ecc71", "WARN": "#f1c40f", "FAIL": "#e74c3c"}
+    )
+
+    for ax, (col, title) in zip(axes, metrics):
+        values = pd.to_numeric(ordered[col], errors="coerce")
+        ax.bar(x, values, color=colors)
+        ax.set_title(title)
+        ax.axhline(0.0, color="#6b7280", linewidth=0.8, linestyle="--")
+        ax.grid(True, axis="y", alpha=0.25)
+
+    axes[-1].set_xticks(x)
+    axes[-1].set_xticklabels(labels)
+    plt.tight_layout()
+    output = plots_dir / "noncooperative_attack_summary.png"
+    plt.savefig(output, dpi=180, bbox_inches="tight")
+    plt.close(fig)
+    return [output.name]
+
+
+def plot_noncooperative_attack_timelines(attack_df: pd.DataFrame, plots_dir: Path) -> List[str]:
+    generated: List[str] = []
+    for row in attack_df.to_dict("records"):
+        run_dir = ROOT / row["output_dir"]
+        effect_metrics = coerce_numeric(
+            ensure_csv(run_dir / "noncooperative_attack_effect_metrics.csv"),
+            [
+                "time",
+                "connectivityRatio",
+                "pdr",
+                "throughputMbps",
+                "delayMs",
+                "damageDuration",
+                "recoveryProgress",
+            ],
+        )
+        events = coerce_numeric(
+            ensure_csv(run_dir / "noncooperative_attack_events.csv"),
+            ["eventTime", "executedObservedNodeId", "executedEntityNodeId", "nodeRemoved"],
+        )
+        recommendations = coerce_numeric(
+            ensure_csv(run_dir / "noncooperative_attack_recommendations.csv"),
+            ["windowStart", "recommendedObservedNodeId", "recommendedScore"],
+        )
+        if effect_metrics.empty:
+            continue
+
+        global_df = effect_metrics[effect_metrics["targetScope"] == "global"].copy()
+        local_df = effect_metrics[effect_metrics["targetScope"] == "target_neighborhood"].copy()
+        if global_df.empty:
+            continue
+
+        fig, axes = plt.subplots(4, 1, figsize=(14, 16), sharex=True)
+        fig.suptitle(row["run_name"], fontsize=13, fontweight="bold")
+
+        axes[0].plot(global_df["time"], global_df["connectivityRatio"], color="#2980b9", label="Global Connectivity")
+        if not local_df.empty:
+            axes[0].plot(local_df["time"], local_df["connectivityRatio"], color="#f39c12", linestyle="--", label="Neighborhood Connectivity")
+        axes[0].set_ylabel("Connectivity")
+        axes[0].grid(True, alpha=0.25)
+        axes[0].legend(loc="upper right")
+        annotate_attack_phases(axes[0], global_df)
+
+        axes[1].plot(global_df["time"], global_df["pdr"], color="#27ae60", label="Global PDR")
+        if not local_df.empty:
+            axes[1].plot(local_df["time"], local_df["pdr"], color="#c0392b", linestyle="--", label="Neighborhood PDR")
+        axes[1].set_ylabel("PDR")
+        axes[1].grid(True, alpha=0.25)
+        axes[1].legend(loc="upper right")
+        annotate_attack_phases(axes[1], global_df)
+
+        axes[2].plot(global_df["time"], global_df["delayMs"], color="#d35400", label="Global Delay")
+        if not local_df.empty:
+            axes[2].plot(local_df["time"], local_df["delayMs"], color="#8e44ad", linestyle="--", label="Neighborhood Delay")
+        axes[2].set_ylabel("Delay (ms)")
+        axes[2].grid(True, alpha=0.25)
+        axes[2].legend(loc="upper right")
+        annotate_attack_phases(axes[2], global_df)
+
+        axes[3].plot(global_df["time"], global_df["recoveryProgress"], color="#16a085", label="Global Recovery Progress")
+        if not local_df.empty:
+            axes[3].plot(local_df["time"], local_df["recoveryProgress"], color="#2c3e50", linestyle="--", label="Neighborhood Recovery Progress")
+        if not recommendations.empty:
+            rec_group = recommendations.groupby("windowStart")["recommendedScore"].max().reset_index()
+            ax3b = axes[3].twinx()
+            ax3b.plot(rec_group["windowStart"], rec_group["recommendedScore"], color="#7f8c8d", linestyle=":", label="Top Recommendation Score")
+            ax3b.set_ylabel("Rec Score")
+        phase_y = pd.Categorical(global_df["phase"], ["pre_attack", "immediate_post_attack", "recovery", "final"], ordered=True).codes
+        ax3c = axes[3].twinx()
+        plot_state_series(
+            ax3c,
+            global_df["time"],
+            pd.Series(phase_y, index=global_df.index),
+            color="#8e44ad",
+            label="Phase",
+            linestyle="-.",
+            linewidth=1.0,
+            marker_size=14.0,
+        )
+        ax3c.set_yticks([0, 1, 2, 3])
+        ax3c.set_yticklabels(["pre", "post", "recovery", "final"])
+        ax3c.set_ylabel("Phase")
+        if not events.empty:
+            for _, event in events.iterrows():
+                if pd.notna(event.get("eventTime")):
+                    for ax in axes:
+                        ax.axvline(float(event["eventTime"]), color="#c0392b", linestyle="--", alpha=0.6)
+        axes[3].set_ylabel("Recovery Progress")
+        axes[3].set_xlabel("Time (s)")
+        axes[3].grid(True, alpha=0.25)
+        axes[3].legend(loc="upper right")
+        annotate_attack_phases(axes[3], global_df)
+
+        plt.tight_layout()
+        name = f"{slugify(row['run_name'])}_attack_timeline.png"
+        output = plots_dir / name
+        plt.savefig(output, dpi=160, bbox_inches="tight")
+        plt.close(fig)
+        generated.append(name)
+
+    return generated
+
+
 def write_html_report(
     output_root: Path,
     coop_df: pd.DataFrame,
     non_df: pd.DataFrame,
+    attack_df: pd.DataFrame,
     generated_plots: List[str],
 ) -> None:
     report_path = output_root / "validation_report.html"
@@ -1406,12 +2187,13 @@ def write_html_report(
     )
 
     summary_rows = {
-        "总运行数": int(len(coop_df) + len(non_df)),
+        "总运行数": int(len(coop_df) + len(non_df) + len(attack_df)),
         "合作运行数": int(len(coop_df)),
         "非合作运行数": int(len(non_df)),
-        "PASS 数": int((pd.concat([coop_df, non_df], ignore_index=True)["validation_state"] == "PASS").sum()),
-        "WARN 数": int((pd.concat([coop_df, non_df], ignore_index=True)["validation_state"] == "WARN").sum()),
-        "FAIL 数": int((pd.concat([coop_df, non_df], ignore_index=True)["validation_state"] == "FAIL").sum()),
+        "非合作打击运行数": int(len(attack_df)),
+        "PASS 数": int((pd.concat([coop_df, non_df, attack_df], ignore_index=True)["validation_state"] == "PASS").sum()),
+        "WARN 数": int((pd.concat([coop_df, non_df, attack_df], ignore_index=True)["validation_state"] == "WARN").sum()),
+        "FAIL 数": int((pd.concat([coop_df, non_df, attack_df], ignore_index=True)["validation_state"] == "FAIL").sum()),
     }
 
     summary_table = pd.DataFrame(
@@ -1419,6 +2201,7 @@ def write_html_report(
     ).to_html(index=False, classes="table summary")
     coop_table = coop_df.to_html(index=False, classes="table detail", float_format=lambda x: f"{x:.4f}")
     non_table = non_df.to_html(index=False, classes="table detail", float_format=lambda x: f"{x:.4f}")
+    attack_table = attack_df.to_html(index=False, classes="table detail", float_format=lambda x: f"{x:.4f}")
 
     html = f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -1494,13 +2277,18 @@ def write_html_report(
     <h2>非合作模式明细</h2>
     {non_table}
   </div>
+
+  <div class="section">
+    <h2>非合作打击明细</h2>
+    {attack_table}
+  </div>
 </body>
 </html>
 """
     report_path.write_text(html, encoding="utf-8")
 
 
-def write_markdown_summary(output_root: Path, coop_df: pd.DataFrame, non_df: pd.DataFrame) -> None:
+def write_markdown_summary(output_root: Path, coop_df: pd.DataFrame, non_df: pd.DataFrame, attack_df: pd.DataFrame) -> None:
     md = output_root / "README.md"
     lines = [
         "# 当前功能仿真验证结果",
@@ -1516,23 +2304,35 @@ def write_markdown_summary(output_root: Path, coop_df: pd.DataFrame, non_df: pd.
         "",
         non_df.to_csv(index=False),
         "",
+        "## 非合作打击结果",
+        "",
+        attack_df.to_csv(index=False),
+        "",
         "## 关键文件",
         "",
         "- `summary/all_runs_summary.csv`",
         "- `summary/cooperative_summary.csv`",
         "- `summary/noncooperative_summary.csv`",
+        "- `summary/noncooperative_attack_summary.csv`",
         "- `validation_report.html`",
         "- `plots/`",
     ]
     md.write_text("\n".join(lines), encoding="utf-8")
 
 
-def persist_summaries(output_root: Path, all_df: pd.DataFrame, coop_df: pd.DataFrame, non_df: pd.DataFrame) -> None:
+def persist_summaries(
+    output_root: Path,
+    all_df: pd.DataFrame,
+    coop_df: pd.DataFrame,
+    non_df: pd.DataFrame,
+    attack_df: pd.DataFrame,
+) -> None:
     summary_dir = output_root / "summary"
     summary_dir.mkdir(parents=True, exist_ok=True)
     all_df.to_csv(summary_dir / "all_runs_summary.csv", index=False)
     coop_df.to_csv(summary_dir / "cooperative_summary.csv", index=False)
     non_df.to_csv(summary_dir / "noncooperative_summary.csv", index=False)
+    attack_df.to_csv(summary_dir / "noncooperative_attack_summary.csv", index=False)
     (summary_dir / "all_runs_summary.json").write_text(
         all_df.to_json(orient="records", force_ascii=False, indent=2), encoding="utf-8"
     )
@@ -1595,6 +2395,8 @@ def main() -> int:
         run_dir, error = run_one_spec(spec, runs_root)
         if spec.operation_mode == "cooperative":
             result = summarize_cooperative_run(spec, run_dir, error)
+        elif spec.enable_non_cooperative_attack:
+            result = summarize_noncooperative_attack_run(spec, run_dir, error)
         else:
             result = summarize_noncooperative_run(spec, run_dir, error)
         results.append(result)
@@ -1602,17 +2404,22 @@ def main() -> int:
     all_df = pd.DataFrame(results)
     coop_df = all_df[all_df["category"] == "cooperative"].copy()
     non_df = all_df[all_df["category"] == "non_cooperative"].copy()
+    attack_df = all_df[all_df["category"] == "non_cooperative_attack"].copy()
 
     generated_plots: List[str] = []
     generated_plots.extend(plot_cooperative_summary(coop_df, plots_dir))
+    generated_plots.extend(plot_cooperative_impact_summary(coop_df, plots_dir))
     generated_plots.extend(plot_cooperative_delta_heatmap(coop_df, plots_dir))
     generated_plots.extend(plot_cooperative_timelines(coop_df, runs_root, plots_dir))
+    generated_plots.extend(plot_scene_realism_profiles(all_df, plots_dir))
     generated_plots.extend(plot_noncooperative_summary(non_df, plots_dir))
     generated_plots.extend(plot_noncooperative_timelines(non_df, plots_dir))
+    generated_plots.extend(plot_noncooperative_attack_summary(attack_df, plots_dir))
+    generated_plots.extend(plot_noncooperative_attack_timelines(attack_df, plots_dir))
 
-    persist_summaries(output_root, all_df, coop_df, non_df)
-    write_html_report(output_root, coop_df, non_df, generated_plots)
-    write_markdown_summary(output_root, coop_df, non_df)
+    persist_summaries(output_root, all_df, coop_df, non_df, attack_df)
+    write_html_report(output_root, coop_df, non_df, attack_df, generated_plots)
+    write_markdown_summary(output_root, coop_df, non_df, attack_df)
 
     pass_count = int((all_df["validation_state"] == "PASS").sum())
     warn_count = int((all_df["validation_state"] == "WARN").sum())

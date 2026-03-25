@@ -63,6 +63,11 @@ enum class RecoveryObjective
     Pdr
 };
 
+enum class NonCooperativeAttackType
+{
+    NodeStrike
+};
+
 inline std::string
 OperationModeToString(OperationMode mode)
 {
@@ -229,6 +234,28 @@ TryParseRecoveryObjective(const std::string& value, RecoveryObjective& objective
     return false;
 }
 
+inline std::string
+NonCooperativeAttackTypeToString(NonCooperativeAttackType attackType)
+{
+    switch (attackType)
+    {
+    case NonCooperativeAttackType::NodeStrike:
+        return "node_strike";
+    }
+    return "node_strike";
+}
+
+inline bool
+TryParseNonCooperativeAttackType(const std::string& value, NonCooperativeAttackType& attackType)
+{
+    if (value == "node_strike")
+    {
+        attackType = NonCooperativeAttackType::NodeStrike;
+        return true;
+    }
+    return false;
+}
+
 struct TrajectoryPoint
 {
     double time;
@@ -270,6 +297,20 @@ struct EnvironmentPreset
     bool hasWaterSurface = false;
     bool reflectionAware = false;
     double pathLossExponent = 2.5;
+    double urbanAltitudePenaltyDbLow = 0.0;
+    double urbanAltitudeGainDbHigh = 0.0;
+    double urbanStreetCanyonFactor = 0.0;
+    double reroutePressureFactor = 1.0;
+    double controlMessageUrgencyFactor = 1.0;
+    double relayInstabilityFactor = 1.0;
+    double formationReconfigPenalty = 1.0;
+    double carrierFrequencyGHz = 5.18;
+    double channelBandwidthMHz = 20.0;
+    std::string polarizationMode = "vertical";
+    double lakeVolatilityJitterDb = 0.0;
+    double lakeDeepFadeProbability = 0.0;
+    double lakeDeepFadeMaxDb = 0.0;
+    double lakeReflectionDelayJitterMs = 0.0;
 };
 
 struct InterferencePreset
@@ -329,6 +370,35 @@ struct CooperativeControlConfig
     bool allowRouteRebuild = true;
 };
 
+struct NonCooperativeAttackConfig
+{
+    bool enabled = false;
+    NonCooperativeAttackType attackType = NonCooperativeAttackType::NodeStrike;
+    int32_t manualStrikeTarget = -1;
+    double attackExecuteTime = -1.0;
+    double attackEvaluationDuration = 12.0;
+    uint32_t attackNeighborhoodHop = 1;
+};
+
+struct SceneRealismOverrides
+{
+    bool enabled = false;
+    double urbanAltitudePenaltyDbLow = -1.0;
+    double urbanAltitudeGainDbHigh = -1.0;
+    double urbanStreetCanyonFactor = -1.0;
+    double lakeVolatilityJitterDb = -1.0;
+    double lakeDeepFadeProbability = -1.0;
+    double lakeDeepFadeMaxDb = -1.0;
+    double lakeReflectionDelayJitterMs = -1.0;
+    double carrierFrequencyGHz = -1.0;
+    double channelBandwidthMHz = -1.0;
+    std::string polarizationMode;
+    double reroutePressureFactor = -1.0;
+    double controlMessageUrgencyFactor = -1.0;
+    double relayInstabilityFactor = -1.0;
+    double formationReconfigPenalty = -1.0;
+};
+
 struct ScenarioEnvironmentConfig
 {
     OperationMode operationMode = OperationMode::Cooperative;
@@ -346,6 +416,8 @@ struct ScenarioEnvironmentConfig
     ObservationPreset observationPreset;
     TrafficPlatformPreset trafficPlatformPreset;
     CooperativeControlConfig cooperativeControlConfig;
+    NonCooperativeAttackConfig nonCooperativeAttackConfig;
+    SceneRealismOverrides sceneRealismOverrides;
 };
 
 struct EnvironmentSummary
@@ -369,6 +441,20 @@ struct EnvironmentSummary
     double interferenceFactor = 1.0;
     double connectivityRangeFactor = 1.0;
     double pathLossExponent = 2.5;
+    double urbanAltitudePenaltyDbLow = 0.0;
+    double urbanAltitudeGainDbHigh = 0.0;
+    double urbanStreetCanyonFactor = 0.0;
+    double reroutePressureFactor = 1.0;
+    double controlMessageUrgencyFactor = 1.0;
+    double relayInstabilityFactor = 1.0;
+    double formationReconfigPenalty = 1.0;
+    double carrierFrequencyGHz = 5.18;
+    double channelBandwidthMHz = 20.0;
+    std::string polarizationMode = "vertical";
+    double lakeVolatilityJitterDb = 0.0;
+    double lakeDeepFadeProbability = 0.0;
+    double lakeDeepFadeMaxDb = 0.0;
+    double lakeReflectionDelayJitterMs = 0.0;
     double rxSensitivity = -90.0;
     double txPower = 23.0;
     double noiseFigure = 7.0;
@@ -403,6 +489,12 @@ struct EnvironmentSummary
     bool allowRelayReselection = true;
     bool allowSlotReallocation = true;
     bool allowRouteRebuild = true;
+    bool nonCooperativeAttackEnabled = false;
+    std::string nonCooperativeAttackType = "node_strike";
+    int32_t manualStrikeTarget = -1;
+    double attackExecuteTime = -1.0;
+    double attackEvaluationDuration = 12.0;
+    uint32_t attackNeighborhoodHop = 1;
     uint32_t buildingFeatureCount = 0;
     uint32_t forestFeatureCount = 0;
     uint32_t waterFeatureCount = 0;
@@ -660,6 +752,111 @@ struct ObservationRuntimeState
     uint32_t nextObservedTrackId = 200000;
 };
 
+struct NonCooperativeAttackRecommendation
+{
+    double windowStart = std::numeric_limits<double>::quiet_NaN();
+    double windowEnd = std::numeric_limits<double>::quiet_NaN();
+    uint32_t recommendedObservedNodeId = 0;
+    double recommendedScore = 0.0;
+    uint32_t recommendationRank = 0;
+    std::string recommendationReason;
+    std::string inferenceMethod = "multi_metric_graph_baseline_v1";
+    double weightedDegreeCentrality = 0.0;
+    double weightedBetweennessCentrality = 0.0;
+    double weightedClosenessCentrality = 0.0;
+    double weightedPageRank = 0.0;
+    double weightedKShell = 0.0;
+};
+
+struct NonCooperativeAttackPlan
+{
+    std::string operationMode = "non_cooperative";
+    std::string sceneType;
+    std::string attackType = "node_strike";
+    int32_t recommendedObservedNodeId = -1;
+    int32_t confirmedObservedNodeId = -1;
+    bool userTriggeredExecution = false;
+    double attackExecuteTime = -1.0;
+    std::string targetBindingStatus = "not_attempted";
+    double strikeExecuteTime = std::numeric_limits<double>::quiet_NaN();
+    std::string strikeMode = "manual_command";
+    double evaluationWindowStart = std::numeric_limits<double>::quiet_NaN();
+    double evaluationWindowEnd = std::numeric_limits<double>::quiet_NaN();
+};
+
+struct NonCooperativeTargetBindingResult
+{
+    double eventTime = std::numeric_limits<double>::quiet_NaN();
+    uint32_t observedNodeId = 0;
+    std::string bindingStatus = "not_attempted";
+    double bindingConfidence = 0.0;
+    bool isTrackStable = false;
+    bool isTrackActive = false;
+    int32_t boundTargetObjectKey = -1;
+    int32_t executedEntityNodeId = -1;
+    bool isTrueCriticalTarget = false;
+    std::string mismatchType = "not_evaluated";
+};
+
+struct NonCooperativeAttackEvent
+{
+    double eventTime = std::numeric_limits<double>::quiet_NaN();
+    std::string attackType = "node_strike";
+    int32_t recommendedObservedNodeId = -1;
+    int32_t confirmedObservedNodeId = -1;
+    int32_t executedObservedNodeId = -1;
+    std::string targetBindingStatus = "not_attempted";
+    bool isTrueTargetHit = false;
+    std::string targetMismatchType = "not_evaluated";
+    bool nodeRemoved = false;
+    int32_t executedEntityNodeId = -1;
+    int32_t boundTargetObjectKey = -1;
+};
+
+struct NonCooperativeAttackEffectMetric
+{
+    double time = std::numeric_limits<double>::quiet_NaN();
+    std::string phase = "pre_attack";
+    std::string targetScope = "global";
+    double connectivityRatio = std::numeric_limits<double>::quiet_NaN();
+    double pdr = std::numeric_limits<double>::quiet_NaN();
+    double throughputMbps = std::numeric_limits<double>::quiet_NaN();
+    double delayMs = std::numeric_limits<double>::quiet_NaN();
+    double damageDuration = std::numeric_limits<double>::quiet_NaN();
+    double recoveryProgress = std::numeric_limits<double>::quiet_NaN();
+    int32_t recommendedObservedNodeId = -1;
+    int32_t confirmedObservedNodeId = -1;
+    int32_t executedObservedNodeId = -1;
+};
+
+struct NonCooperativeAttackRuntimeState
+{
+    bool initialized = false;
+    bool attackExecuted = false;
+    bool recommendationAvailable = false;
+    bool finalEffectSampleRecorded = false;
+    double lastRecommendationUpdateTime = -1.0;
+    int32_t currentRecommendedObservedNodeId = -1;
+    int32_t currentConfirmedObservedNodeId = -1;
+    int32_t executedObservedNodeId = -1;
+    int32_t executedEntityNodeId = -1;
+    int32_t executedTargetObjectKey = -1;
+    std::string recommendationMethod = "multi_metric_graph_baseline_v1";
+    std::string lastRecommendationReason = "not_evaluated";
+    double actualAttackExecutionTime = std::numeric_limits<double>::quiet_NaN();
+    double recoveryCompletedAt = std::numeric_limits<double>::quiet_NaN();
+    std::set<uint32_t> struckObservedNodeIds;
+    std::set<uint32_t> struckTargetObjectKeys;
+    std::set<uint32_t> struckEntityNodeIds;
+    bool targetNeighborhoodFrozen = false;
+    std::set<uint32_t> targetNeighborhoodEntityNodeIds;
+    std::vector<NonCooperativeAttackRecommendation> recommendations;
+    std::vector<NonCooperativeTargetBindingResult> targetBindings;
+    std::vector<NonCooperativeAttackEvent> attackEvents;
+    std::vector<NonCooperativeAttackEffectMetric> effectMetrics;
+    NonCooperativeAttackPlan attackPlan;
+};
+
 struct CooperativeFailureEvent
 {
     double time = std::numeric_limits<double>::quiet_NaN();
@@ -714,6 +911,10 @@ struct CooperativeRecoveryMetrics
     uint32_t activeNodeCount = 0;
     uint32_t leaderNodeId = 0;
     bool isLeaderAlive = true;
+    uint32_t routeChangeCount = 0;
+    uint32_t relaySwitchCount = 0;
+    uint32_t controlDeadlineMissCount = 0;
+    double routePressureScore = 0.0;
     double responseTimeSec = std::numeric_limits<double>::quiet_NaN();
     double recoveryTimeSec = std::numeric_limits<double>::quiet_NaN();
     double stabilizationTimeSec = std::numeric_limits<double>::quiet_NaN();
@@ -751,7 +952,14 @@ struct CooperativeRuntimeState
     double recoveryCompletedAt = -1.0;
     double stabilizationCompletedAt = -1.0;
     std::string lastLeaderSwitchReason = "no_switch";
+    uint32_t routeChangeCount = 0;
+    uint32_t relaySwitchCount = 0;
+    uint32_t controlDeadlineMissCount = 0;
+    double lastRoutePressureScore = 0.0;
     std::set<uint32_t> effectiveCooperativeNodes;
+    std::set<uint32_t> frozenFailureNeighborhoodNodes;
+    std::map<uint32_t, std::vector<uint32_t>> previousNeighbors;
+    std::map<uint32_t, int32_t> previousPreferredRelay;
     std::vector<CooperativeFailureEvent> failureEvents;
     std::vector<CooperativeRecoveryAction> recoveryActions;
     std::vector<CooperativeRecoveryMetrics> metricsHistory;
@@ -854,6 +1062,7 @@ extern std::vector<SceneOverlayRegion> g_waterRegions;
 extern std::vector<SceneOverlayRegion> g_openFieldRegions;
 extern ObservationRuntimeState g_observationRuntime;
 extern CooperativeRuntimeState g_cooperativeRuntime;
+extern NonCooperativeAttackRuntimeState g_nonCooperativeAttackRuntime;
 extern Ptr<UniformRandomVariable> g_randVar;
 extern double g_pathLossExponent;
 
@@ -883,6 +1092,10 @@ extern std::ofstream g_observedLinkEvidenceLog;
 extern std::ofstream g_inferredTopologyEdgesLog;
 extern std::ofstream g_inferredGraphNodesLog;
 extern std::ofstream g_keyNodeCandidatesLog;
+extern std::ofstream g_nonCooperativeAttackRecommendationsLog;
+extern std::ofstream g_nonCooperativeAttackEventsLog;
+extern std::ofstream g_nonCooperativeTargetBindingLog;
+extern std::ofstream g_nonCooperativeAttackEffectMetricsLog;
 extern std::ofstream g_cooperativeFailureEventsLog;
 extern std::ofstream g_cooperativeRecoveryActionsLog;
 extern std::ofstream g_cooperativeRecoveryMetricsLog;
@@ -901,6 +1114,7 @@ void LogPositions();
 double CalculateDistance(Ptr<Node> node1, Ptr<Node> node2);
 void UpdateTopology();
 double CalculatePathLoss(double dist);
+double CalculatePathLoss(const Vector& src, const Vector& dst);
 double CalculateInterference_mW(uint32_t dstId, uint32_t excludeId,
                                 int channelFilter = -1);
 double EstimateSINR(uint32_t srcId, uint32_t dstId, int channelFilter = -1);
@@ -943,6 +1157,16 @@ void BuildInferredTopologyEdgesForWindow(
     const std::vector<ObservedLinkEvidence>& evidenceBatch);
 void BuildGraphRepresentationForWindow(
     const std::vector<InferredTopologyEdge>& inferredBatch);
+void InitializeNonCooperativeAttackState();
+void UpdateNonCooperativeAttackRecommendations();
+bool BuildCurrentNonCooperativeAttackPlan(NonCooperativeAttackPlan& plan);
+bool TryBindObservedTargetForStrike(uint32_t observedNodeId,
+                                    NonCooperativeTargetBindingResult& bindingResult);
+void MonitorNonCooperativeAttackExecution();
+void MonitorNonCooperativeAttackEffectMetrics();
+bool IsNonCooperativeObservedTrackStruck(uint32_t observedNodeId);
+bool IsNonCooperativeTargetObjectStruck(uint32_t targetObjectKey);
+bool IsNonCooperativeEntityNodeStruck(uint32_t interferenceNodeId);
 void SetupSimulationInfrastructure(bool useFormation,
                                    OperationMode operationMode,
                                    const std::string& sceneType,
@@ -950,6 +1174,8 @@ void SetupSimulationInfrastructure(bool useFormation,
                                    const std::string& formationName,
                                    const std::string& mapFile,
                                    const CooperativeControlConfig& cooperativeConfig,
+                                   const NonCooperativeAttackConfig& nonCooperativeAttackConfig,
+                                   const SceneRealismOverrides& sceneRealismOverrides,
                                    double customPathLossExp,
                                    double customRxSensitivity,
                                    double customTxPower);

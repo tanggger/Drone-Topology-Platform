@@ -10,7 +10,10 @@ constexpr uint32_t kInterferenceTargetObjectBase = 1000;
 constexpr double kObservationEventPollIntervalSec = 0.1;
 constexpr double kTargetTxStartTimeSec = 1.0;
 constexpr uint32_t kObservedChannelId = 0;
-constexpr double kObservedCenterFrequencyHz = 5.18e9;
+double GetObservedCenterFrequencyHz()
+{
+    return std::max(1.0, g_environmentSummary.carrierFrequencyGHz) * 1e9;
+}
 
 double Clamp01(double value)
 {
@@ -622,7 +625,7 @@ void UpdateObservedTrackStates()
                 window.windowEnd = windowEnd;
                 window.observedNodeId = observedNodeId;
                 window.channelId = kObservedChannelId;
-                window.centerFrequencyHz = kObservedCenterFrequencyHz;
+                window.centerFrequencyHz = GetObservedCenterFrequencyHz();
                 window.observerId = observerId;
                 window.sceneType = g_environmentConfig.sceneType;
                 window.operationMode =
@@ -764,10 +767,77 @@ void MonitorObservedSignalEvents()
                 continue;
             }
 
+            uint32_t observedNodeId = AllocateObservedTrackIdForTarget(targetObjectKey);
+
             std::pair<uint32_t, uint32_t> activeKey{observerId, targetObjectKey};
             if (!targetActiveNow)
             {
                 FlushActiveObservedEvent(activeKey);
+                continue;
+            }
+
+            const bool targetStruck = IsNonCooperativeTargetObjectStruck(targetObjectKey);
+            if (targetStruck)
+            {
+                auto existing = g_observationRuntime.activeEventAccumulators.find(activeKey);
+                bool stateChanged = existing == g_observationRuntime.activeEventAccumulators.end() ||
+                                    !existing->second.isMissing ||
+                                    existing->second.missingReason != "node_strike";
+                if (stateChanged && existing != g_observationRuntime.activeEventAccumulators.end())
+                {
+                    FlushActiveObservedEvent(activeKey);
+                }
+
+                ActiveObservedEventAccumulator& acc =
+                    g_observationRuntime.activeEventAccumulators[activeKey];
+                if (stateChanged || !acc.active)
+                {
+                    acc = ActiveObservedEventAccumulator();
+                    acc.active = true;
+                    acc.signalDetected = false;
+                    acc.isMissing = true;
+                    acc.missingReason = "node_strike";
+                    acc.segmentStartTime = currentTime;
+                    acc.observerId = observerId;
+                    acc.targetObjectKey = targetObjectKey;
+                    acc.observedNodeId = observedNodeId;
+                    acc.channelId = kObservedChannelId;
+                    acc.centerFrequencyHz = GetObservedCenterFrequencyHz();
+                    acc.sceneType = g_environmentConfig.sceneType;
+                    acc.operationMode =
+                        OperationModeToString(g_environmentConfig.operationMode);
+                    acc.signalSortingGroup =
+                        "grp_target_" + std::to_string(targetObjectKey);
+                    acc.nodeSignalAssociation = "removed";
+                    acc.disambiguationStatus = "terminated";
+                    acc.activityPatternScore = 0.0;
+                }
+
+                acc.segmentEndTime = std::min(g_config.duration,
+                                              currentTime +
+                                                  kObservationEventPollIntervalSec);
+                acc.sampleCount++;
+                acc.noiseLevelSum +=
+                    g_environmentConfig.observationPreset.powerNoiseStdDevDb;
+                acc.positionConfidenceSum += 0.0;
+                acc.signalConfidenceSum += 0.0;
+                acc.overallConfidenceSum += 0.0;
+
+                UpdateWindowActivityAccumulator(
+                    observerId,
+                    targetObjectKey,
+                    false,
+                    "node_strike",
+                    currentTime,
+                    std::min(g_config.duration,
+                             currentTime + kObservationEventPollIntervalSec),
+                    std::numeric_limits<double>::quiet_NaN(),
+                    std::numeric_limits<double>::quiet_NaN(),
+                    std::numeric_limits<double>::quiet_NaN(),
+                    0.0,
+                    0.0,
+                    0.0,
+                    currentTime);
                 continue;
             }
 
@@ -812,8 +882,6 @@ void MonitorObservedSignalEvents()
             }
 
             bool signalDetected = !isMissing;
-            uint32_t observedNodeId =
-                AllocateObservedTrackIdForTarget(targetObjectKey);
 
             auto it = g_observationRuntime.activeEventAccumulators.find(activeKey);
             bool stateChanged =
@@ -839,7 +907,7 @@ void MonitorObservedSignalEvents()
                 acc.targetObjectKey = targetObjectKey;
                 acc.observedNodeId = observedNodeId;
                 acc.channelId = kObservedChannelId;
-                acc.centerFrequencyHz = kObservedCenterFrequencyHz;
+                acc.centerFrequencyHz = GetObservedCenterFrequencyHz();
                 acc.sceneType = g_environmentConfig.sceneType;
                 acc.operationMode =
                     OperationModeToString(g_environmentConfig.operationMode);

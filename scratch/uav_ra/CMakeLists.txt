@@ -1,6 +1,7 @@
 build_exec(
   EXECNAME uav_resource_allocation
   SOURCE_FILES main.cc
+               non_cooperative_attack.cc
                non_cooperative_inference.cc
                output_runtime.cc
                scenario_environment.cc

@@ -5,8 +5,8 @@
 当前结论只有一句：
 
 - 可以先启动前端搭建与联调
-- 可以先跑合作模式和非合作观测/推断效果
-- 非合作“基于推断结果再去做打击/压制/节点破坏”可以后置，不影响当前前端主工作区搭建
+- 可以直接跑合作模式和非合作完整闭环
+- 非合作“推断 -> 打击 -> 效果评估”现在已经有正式接口和结果结构
 
 ## 1. 当前后端能力边界
 
@@ -34,16 +34,18 @@
   - 推断边
   - 图节点
   - 关键节点候选
-
-当前后端还没有作为正式前端能力交付的内容：
-
-- 非合作模式下基于推断结果的正式“打击/压制/节点破坏”工作流接口
-- 非合作打击后的专属效果评估 API 结果面板
+- 非合作打击闭环
+  - 目标推荐
+  - 用户指定执行
+  - `node_strike`
+  - 目标绑定
+  - 打击事件
+  - 打击前后效果评估
 
 因此前端当前应分两条线推进：
 
 1. 合作模式工作区直接按完整工作流接入
-2. 非合作模式工作区先做到“观测 -> 推断 -> 关键节点识别”展示
+2. 非合作模式工作区可直接接“观测 -> 推断 -> 打击 -> 效果评估”完整链路
 
 ## 2. 接口总览
 
@@ -136,6 +138,21 @@ Content-Type: application/json
   "allowSlotReallocation": true,
   "allowRouteRebuild": true,
 
+  "urbanAltitudePenaltyDbLow": 7.0,
+  "urbanAltitudeGainDbHigh": 6.0,
+  "urbanStreetCanyonFactor": 1.0,
+  "lakeVolatilityJitterDb": 4.0,
+  "lakeDeepFadeProbability": 0.18,
+  "lakeDeepFadeMaxDb": 8.0,
+  "lakeReflectionDelayJitterMs": 18.0,
+  "carrierFrequencyGHz": 5.18,
+  "channelBandwidthMHz": 20.0,
+  "polarizationMode": "vertical",
+  "reroutePressureFactor": 1.3,
+  "controlMessageUrgencyFactor": 1.25,
+  "relayInstabilityFactor": 1.2,
+  "formationReconfigPenalty": 1.25,
+
   "buildings": [],
 
   "pathLossExp": 2.8,
@@ -227,7 +244,26 @@ Content-Type: application/json
   - `allowSlotReallocation`
   - `allowRouteRebuild`
 
-#### 4.3.3 Custom 难度字段
+#### 4.3.3 场景真实性增强字段
+
+这些字段对合作和非合作都适用，属于可选覆盖项；不传时后端使用场景默认值。
+
+- `urbanAltitudePenaltyDbLow`
+- `urbanAltitudeGainDbHigh`
+- `urbanStreetCanyonFactor`
+- `lakeVolatilityJitterDb`
+- `lakeDeepFadeProbability`
+- `lakeDeepFadeMaxDb`
+- `lakeReflectionDelayJitterMs`
+- `carrierFrequencyGHz`
+- `channelBandwidthMHz`
+- `polarizationMode`
+- `reroutePressureFactor`
+- `controlMessageUrgencyFactor`
+- `relayInstabilityFactor`
+- `formationReconfigPenalty`
+
+#### 4.3.4 Custom 难度字段
 
 只有当 `difficulty = Custom` 时，以下字段才会生效：
 
@@ -245,6 +281,37 @@ Content-Type: application/json
 - `numInterfere`
 - `interfereRate`
 - `interfereDuty`
+
+#### 4.3.5 非合作打击字段
+
+只有当：
+
+- `operationMode = non_cooperative`
+- 且需要启用非合作打击闭环
+
+时，以下字段才需要传：
+
+- `enableNonCooperativeAttack`
+  - `true | false`
+- `attackType`
+  - 当前固定为 `node_strike`
+- `manualStrikeTarget`
+  - `observedNodeId`
+- `attackExecuteTime`
+  - 单位秒
+- `attackEvaluationDuration`
+  - 单位秒
+- `attackNeighborhoodHop`
+  - 当前推荐 `1`
+
+说明：
+
+- 如果 `enableNonCooperativeAttack = false`
+  - 系统只输出非合作观测 / 推断结果
+  - 不执行打击
+- 如果 `enableNonCooperativeAttack = true`
+  - 且提供 `manualStrikeTarget + attackExecuteTime`
+  - 系统会对该 `observedNodeId` 当前绑定的目标实体执行 `node_strike`
 
 ### 4.4 响应
 
@@ -312,7 +379,10 @@ GET /api/results/<task_id>/frontend
       "flow_summary": []
     },
     "cooperative": {},
-    "non_cooperative": {},
+    "non_cooperative": {
+      "observation_inference": {},
+      "attack": {}
+    },
     "manifest": {}
   }
 }
@@ -323,6 +393,8 @@ GET /api/results/<task_id>/frontend
 - `shared` 是所有模式共享的数据层
 - `cooperative` 只有在合作模式下才有值
 - `non_cooperative` 只有在非合作模式下才有值
+- `non_cooperative.observation_inference` 是观测 / 推断基础层
+- `non_cooperative.attack` 是非合作打击闭环结果层
 - `manifest` 用于判断当前有哪些数据集已经存在
 
 ## 6.2 Manifest 接口
@@ -358,6 +430,10 @@ GET /api/results/<task_id>/manifest
     "sharedDatasets": ["positions", "qos", "environment_summary"],
     "cooperativeDatasets": ["mode_summary", "dashboard_snapshot"],
     "nonCooperativeDatasets": [],
+    "nonCooperativeAttackDatasets": [],
+    "hasNonCooperativeAttack": false,
+    "attackType": null,
+    "attackExecuted": false,
     "availableFiles": []
   }
 }
@@ -739,6 +815,10 @@ data.meta.operationMode === "cooperative"
   - 备份 Leader 接管后的新值
 - `responseTimeSec`、`recoveryTimeSec`、`stabilizationTimeSec` 允许按样本为 `null`
 - 这些时间字段推荐只在状态卡或光标定位样本上展示，不建议对整条曲线做插值补零
+- `failureNeighborhood*` 来自冻结后的故障邻域
+  - 故障激活时确定
+  - 故障 / 恢复 / 稳定阶段复用同一份邻域
+  - 不随故障后的实时拓扑重新计算
 
 恢复判定口径：
 
@@ -814,14 +894,17 @@ data.meta.operationMode === "non_cooperative"
 4. 推断边
 5. 图节点
 6. 关键节点候选
+7. 当前推荐打击目标
+8. 打击计划与执行结果
+9. 打击前后全网 / 目标邻域效果评估
 
-当前不应默认承诺已经具备的前端能力：
+当前仍不应默认承诺已经具备的能力：
 
-1. 非合作打击控制面板真实下发
-2. 基于推断结果的正式压制/打击执行结果
-3. 打击前后专属效果评估页
+1. 前端直接替代后端做自动开火决策
+2. 多轮打击计划编排
+3. 非合作 `link_suppression / jamming / area_denial`
 
-### 9.3 `non_cooperative.observed_signal_events`
+### 9.3 `non_cooperative.observation_inference.observed_signal_events`
 
 文件来源：
 
@@ -832,7 +915,7 @@ data.meta.operationMode === "non_cooperative"
 - 观测事件面板
 - 单节点观测历史
 
-### 9.4 `non_cooperative.observed_comm_windows`
+### 9.4 `non_cooperative.observation_inference.observed_comm_windows`
 
 文件来源：
 
@@ -843,7 +926,7 @@ data.meta.operationMode === "non_cooperative"
 - 当前窗口摘要
 - 中间沙盘“观测到的活动节点”
 
-### 9.5 `non_cooperative.observed_link_evidence`
+### 9.5 `non_cooperative.observation_inference.observed_link_evidence`
 
 文件来源：
 
@@ -854,7 +937,7 @@ data.meta.operationMode === "non_cooperative"
 - 边证据面板
 - 推断前证据层
 
-### 9.6 `non_cooperative.inferred_topology_edges`
+### 9.6 `non_cooperative.observation_inference.inferred_topology_edges`
 
 文件来源：
 
@@ -865,7 +948,7 @@ data.meta.operationMode === "non_cooperative"
 - 中间沙盘推断概率边
 - 右侧推断结果列表
 
-### 9.7 `non_cooperative.inferred_graph_nodes`
+### 9.7 `non_cooperative.observation_inference.inferred_graph_nodes`
 
 文件来源：
 
@@ -876,7 +959,7 @@ data.meta.operationMode === "non_cooperative"
 - 图表示节点信息
 - 节点权重信息展示
 
-### 9.8 `non_cooperative.key_node_candidates`
+### 9.8 `non_cooperative.observation_inference.key_node_candidates`
 
 文件来源：
 
@@ -886,6 +969,157 @@ data.meta.operationMode === "non_cooperative"
 
 - 关键节点高亮
 - Top-N 关键节点面板
+
+### 9.9 `non_cooperative.attack.recommendations`
+
+文件来源：
+
+- `noncooperative_attack_recommendations.csv`
+
+前端用途：
+
+- 当前推荐目标卡片
+- 推荐目标时间线
+- Top-K 候选列表
+
+关键字段：
+
+- `windowStart`
+- `windowEnd`
+- `recommendedObservedNodeId`
+- `recommendedScore`
+- `recommendationRank`
+- `recommendationReason`
+- `inferenceMethod`
+
+### 9.10 `non_cooperative.attack.plan`
+
+文件来源：
+
+- `noncooperative_attack_plan.json`
+
+前端用途：
+
+- 攻击计划摘要卡片
+- 执行结果卡片
+- 绑定状态提示
+
+关键字段：
+
+- `recommendedObservedNodeId`
+- `confirmedObservedNodeId`
+- `attackExecuteTime`
+- `targetBindingStatus`
+- `strikeExecuteTime`
+- `executedObservedNodeId`
+- `executedEntityNodeId`
+- `targetNeighborhoodSize`
+- `evaluationWindowStart`
+- `evaluationWindowEnd`
+
+### 9.11 `non_cooperative.attack.events`
+
+文件来源：
+
+- `noncooperative_attack_events.csv`
+
+前端用途：
+
+- 打击事件时间线
+- 命中 / 误选 / 未命中提示
+
+关键字段：
+
+- `eventTime`
+- `attackType`
+- `recommendedObservedNodeId`
+- `confirmedObservedNodeId`
+- `executedObservedNodeId`
+- `targetBindingStatus`
+- `isTrueTargetHit`
+- `targetMismatchType`
+- `nodeRemoved`
+
+### 9.12 `non_cooperative.attack.target_binding`
+
+文件来源：
+
+- `noncooperative_target_binding.csv`
+
+前端用途：
+
+- 展示打击为何成功或失败
+- 调试绑定状态
+
+关键字段：
+
+- `eventTime`
+- `observedNodeId`
+- `bindingStatus`
+- `bindingConfidence`
+- `isTrackStable`
+- `isTrackActive`
+- `boundTargetObjectKey`
+- `executedEntityNodeId`
+- `isTrueCriticalTarget`
+- `mismatchType`
+
+### 9.13 `non_cooperative.attack.effect_metrics`
+
+文件来源：
+
+- `noncooperative_attack_effect_metrics.csv`
+
+前端用途：
+
+- 打击前后全过程时序图
+- 全网 / 目标邻域对照图
+
+关键字段：
+
+- `time`
+- `phase`
+- `targetScope`
+- `connectivityRatio`
+- `pdr`
+- `throughputMbps`
+- `delayMs`
+- `damageDuration`
+- `recoveryProgress`
+
+说明：
+
+- `phase` 取值：
+  - `pre_attack`
+  - `immediate_post_attack`
+  - `recovery`
+  - `final`
+- `targetScope` 取值：
+  - `global`
+  - `target_neighborhood`
+- `target_neighborhood` 语义：
+  - 基于已确认打击目标预冻结的局部评估范围
+  - 在 `pre_attack` 阶段就已经建立
+  - 整轮攻击评估复用同一份邻域，不随攻击后拓扑漂移
+  - 若某次运行无法形成有效局部邻域，则对应局部指标可能为 `null`
+
+### 9.14 `non_cooperative.attack.summary`
+
+文件来源：
+
+- `noncooperative_pre_post_comparison.json`
+
+前端用途：
+
+- 指标摘要卡片
+- 打击前后对比面板
+- 恢复摘要面板
+
+建议直接消费：
+
+- `phaseMetrics`
+- `finalMetrics`
+- `recoverySummary`
 
 ## 10. 地图接口
 
@@ -959,12 +1193,16 @@ POST /api/upload_osm
 
 1. `data.meta`
 2. `data.shared.environment_summary`
-3. `data.non_cooperative.observed_signal_events`
-4. `data.non_cooperative.observed_comm_windows`
-5. `data.non_cooperative.observed_link_evidence`
-6. `data.non_cooperative.inferred_topology_edges`
-7. `data.non_cooperative.inferred_graph_nodes`
-8. `data.non_cooperative.key_node_candidates`
+3. `data.non_cooperative.observation_inference.observed_signal_events`
+4. `data.non_cooperative.observation_inference.observed_comm_windows`
+5. `data.non_cooperative.observation_inference.observed_link_evidence`
+6. `data.non_cooperative.observation_inference.inferred_topology_edges`
+7. `data.non_cooperative.observation_inference.inferred_graph_nodes`
+8. `data.non_cooperative.observation_inference.key_node_candidates`
+9. `data.non_cooperative.attack.recommendations`
+10. `data.non_cooperative.attack.plan`
+11. `data.non_cooperative.attack.effect_metrics`
+12. `data.non_cooperative.attack.summary`
 
 ## 12. Axios 示例
 
@@ -1045,7 +1283,8 @@ async function waitForResult(taskId: string) {
 3. 再接 `shared.positions + topology_links`
 4. 合作模式先接 `dashboard_snapshot + metrics_timeseries`
 5. 非合作模式先接 `inferred_topology_edges + key_node_candidates`
-6. 最后补故障时间线、恢复时间线和高级明细表
+6. 非合作打击再接 `attack.plan + attack.effect_metrics + attack.summary`
+7. 最后补故障时间线、恢复时间线和高级明细表
 
 前端接入注意：
 
@@ -1057,6 +1296,11 @@ async function waitForResult(taskId: string) {
 
 ## 15. 一句话交付边界
 
-当前这套接口已经足够支持你先把前端合作工作区和非合作观测/推断工作区搭起来，并先验证仿真效果。
+当前这套接口已经足够支持你先把前端合作工作区、非合作观测/推断工作区，以及非合作打击结果页搭起来，并直接验证仿真效果。
 
-非合作“基于推断结果的正式打击/压制/节点破坏”可以放到前端效果稳定之后再做，不会卡住现在的前后端联调。
+其中非合作当前正式支持的是：
+
+- 基于推断结果的目标推荐
+- 用户指定目标与执行时间
+- `node_strike` 执行结果
+- 打击前后全网 / 目标邻域效果评估

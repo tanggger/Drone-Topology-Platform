@@ -19,6 +19,228 @@ bool IsWaterSurfaceScene()
     return g_environmentSummary.sceneType == "lake" || g_environmentSummary.hasWaterSurface;
 }
 
+double ClampUnit(double value)
+{
+    return std::max(0.0, std::min(1.0, value));
+}
+
+bool PointInPolygon2d(const Vector& point, const std::vector<Vector>& polygon)
+{
+    if (polygon.size() < 3)
+    {
+        return false;
+    }
+
+    bool inside = false;
+    for (size_t i = 0, j = polygon.size() - 1; i < polygon.size(); j = i++)
+    {
+        const Vector& pi = polygon[i];
+        const Vector& pj = polygon[j];
+        const bool intersect =
+            ((pi.y > point.y) != (pj.y > point.y)) &&
+            (point.x < (pj.x - pi.x) * (point.y - pi.y) /
+                               std::max(1e-9, (pj.y - pi.y)) +
+                           pi.x);
+        if (intersect)
+        {
+            inside = !inside;
+        }
+    }
+    return inside;
+}
+
+double EstimateSegmentLengthInsidePolygon(const Vector& src,
+                                          const Vector& dst,
+                                          const std::vector<Vector>& polygon)
+{
+    if (polygon.size() < 3)
+    {
+        return 0.0;
+    }
+
+    const double dx = dst.x - src.x;
+    const double dy = dst.y - src.y;
+    const double dz = dst.z - src.z;
+    const double dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (dist < 1e-6)
+    {
+        return 0.0;
+    }
+
+    const int samples = std::max(12, static_cast<int>(dist / 10.0));
+    int insideSamples = 0;
+    for (int i = 0; i <= samples; ++i)
+    {
+        const double alpha = static_cast<double>(i) / samples;
+        const Vector point(src.x + alpha * dx, src.y + alpha * dy, src.z + alpha * dz);
+        if (PointInPolygon2d(point, polygon))
+        {
+            ++insideSamples;
+        }
+    }
+
+    return dist * static_cast<double>(insideSamples) / (samples + 1);
+}
+
+double EstimateWaterSurfaceExposure(const Vector& src, const Vector& dst)
+{
+    const double dx = dst.x - src.x;
+    const double dy = dst.y - src.y;
+    const double dz = dst.z - src.z;
+    const double dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (dist < 1e-6)
+    {
+        return 0.0;
+    }
+
+    if (!g_waterRegions.empty())
+    {
+        double weightedExposure = 0.0;
+        for (const auto& region : g_waterRegions)
+        {
+            const double depth = EstimateSegmentLengthInsidePolygon(src, dst, region.points);
+            if (depth <= 0.0)
+            {
+                continue;
+            }
+            weightedExposure += (depth / dist) * region.weight;
+        }
+        if (weightedExposure > 0.0)
+        {
+            return ClampUnit(weightedExposure);
+        }
+    }
+
+    return IsWaterSurfaceScene() ? 1.0 : 0.0;
+}
+
+double EstimateWaterSurfaceVolatilityLossDb(const Vector& src, const Vector& dst)
+{
+    if (!IsWaterSurfaceScene() || !g_environmentSummary.reflectionAware ||
+        g_environmentSummary.lakeVolatilityJitterDb <= 0.0)
+    {
+        return 0.0;
+    }
+
+    const double exposure = EstimateWaterSurfaceExposure(src, dst);
+    if (exposure <= 0.0)
+    {
+        return 0.0;
+    }
+
+    const double dx = dst.x - src.x;
+    const double dy = dst.y - src.y;
+    const double horizontalDist = std::sqrt(dx * dx + dy * dy);
+    const double avgAltitude = 0.5 * (src.z + dst.z);
+    const double heightDiff = std::abs(src.z - dst.z);
+    constexpr double kPi = 3.14159265358979323846;
+    const double elevationAngle =
+        std::atan2(std::max(1.0, heightDiff), std::max(1.0, horizontalDist));
+    const double grazingFactor =
+        ClampUnit(1.10 - elevationAngle / (kPi / 3.0)) *
+        ClampUnit(1.15 - avgAltitude / 180.0);
+    const double geometryFactor = std::max(0.20, 0.35 + 0.65 * grazingFactor);
+
+    const double now = Simulator::Now().GetSeconds();
+    const double phaseSeed = src.x * 0.013 + src.y * 0.017 + dst.x * 0.019 +
+                             dst.y * 0.023 + (src.z + dst.z) * 0.007;
+    const double oscillation =
+        ClampUnit(0.5 + 0.32 * std::sin(0.55 * now + phaseSeed) +
+                  0.18 * std::sin(1.35 * now + phaseSeed * 1.7));
+    const double jitterLoss =
+        g_environmentSummary.lakeVolatilityJitterDb * exposure * geometryFactor * oscillation;
+
+    double deepFadeLoss = 0.0;
+    if (g_environmentSummary.lakeDeepFadeProbability > 0.0 &&
+        g_environmentSummary.lakeDeepFadeMaxDb > 0.0)
+    {
+        const double fadeGate =
+            ClampUnit(0.5 + 0.5 * std::sin(0.28 * now + phaseSeed * 2.3));
+        const double triggerThreshold =
+            ClampUnit(1.0 - g_environmentSummary.lakeDeepFadeProbability);
+        if (fadeGate > triggerThreshold)
+        {
+            const double fadeStrength =
+                (fadeGate - triggerThreshold) /
+                std::max(1e-3, 1.0 - triggerThreshold);
+            deepFadeLoss = g_environmentSummary.lakeDeepFadeMaxDb * exposure *
+                           geometryFactor * fadeStrength;
+        }
+    }
+
+    return jitterLoss + deepFadeLoss;
+}
+
+bool IsUrbanScene()
+{
+    return g_environmentSummary.sceneType == "urban" &&
+           (g_environmentSummary.hasBuildings || g_environmentSummary.buildingFeatureCount > 0);
+}
+
+double EstimateUrbanAltitudeAdjustmentDb(const Vector& src, const Vector& dst)
+{
+    if (!IsUrbanScene() || g_environmentSummary.avgBuildingHeightM <= 0.0)
+    {
+        return 0.0;
+    }
+
+    const double avgBuildingHeight = std::max(5.0, g_environmentSummary.avgBuildingHeightM);
+    const double avgAltitude = 0.5 * (src.z + dst.z);
+    const double relativeAltitude = avgAltitude / avgBuildingHeight;
+
+    const double streetWidth = g_environmentSummary.avgStreetWidthM > 1e-6
+                                   ? g_environmentSummary.avgStreetWidthM
+                                   : 12.0;
+    const double narrowStreetFactor = ClampUnit((20.0 - streetWidth) / 20.0);
+    const double densityFactor =
+        ClampUnit(g_environmentSummary.buildingDensityPerKm2 / 15000.0);
+    const double coverageFactor = ClampUnit(g_environmentSummary.buildingCoverageRatio);
+    const double canyonFactor = ClampUnit(
+        g_environmentSummary.urbanStreetCanyonFactor *
+        (0.4 * coverageFactor + 0.3 * densityFactor + 0.3 * narrowStreetFactor));
+
+    if (relativeAltitude < 0.85 && g_environmentSummary.urbanAltitudePenaltyDbLow > 0.0)
+    {
+        const double severity = (0.85 - relativeAltitude) / 0.85;
+        return g_environmentSummary.urbanAltitudePenaltyDbLow * severity *
+               (0.55 + 0.45 * canyonFactor);
+    }
+
+    if (relativeAltitude > 1.05 && g_environmentSummary.urbanAltitudeGainDbHigh > 0.0)
+    {
+        const double relief = ClampUnit((relativeAltitude - 1.05) / 0.75);
+        return -g_environmentSummary.urbanAltitudeGainDbHigh * relief *
+               (0.45 + 0.55 * (1.0 - 0.5 * canyonFactor));
+    }
+
+    return 0.0;
+}
+
+double GetUrbanAltitudeRangeFactor(const Vector& src, const Vector& dst)
+{
+    if (!IsUrbanScene() || g_environmentSummary.avgBuildingHeightM <= 0.0)
+    {
+        return 1.0;
+    }
+
+    const double avgBuildingHeight = std::max(5.0, g_environmentSummary.avgBuildingHeightM);
+    const double avgAltitude = 0.5 * (src.z + dst.z);
+    const double relativeAltitude = avgAltitude / avgBuildingHeight;
+
+    if (relativeAltitude < 0.85)
+    {
+        const double severity = (0.85 - relativeAltitude) / 0.85;
+        return std::max(0.70, 1.0 - 0.22 * severity);
+    }
+    if (relativeAltitude > 1.05)
+    {
+        const double relief = ClampUnit((relativeAltitude - 1.05) / 0.75);
+        return std::min(1.18, 1.0 + 0.14 * relief);
+    }
+
+    return 1.0;
+}
+
 uint32_t GetLocalRecoveryScopeLimit()
 {
     const auto mode = g_environmentConfig.cooperativeControlConfig.communicationMode;
@@ -34,6 +256,103 @@ uint32_t GetLocalRecoveryScopeLimit()
         return hopLimit >= 2 ? 10u : 6u;
     }
     return std::numeric_limits<uint32_t>::max();
+}
+
+std::set<uint32_t> BuildFailureNeighborhoodNodes(bool applyScopeLimit);
+
+int32_t SelectPreferredRelayForNode(uint32_t nodeId,
+                                    const std::map<uint32_t, std::vector<uint32_t>>& neighbors)
+{
+    auto it = neighbors.find(nodeId);
+    if (it == neighbors.end() || it->second.empty())
+    {
+        return -1;
+    }
+
+    double bestScore = -std::numeric_limits<double>::infinity();
+    int32_t bestNeighbor = -1;
+    for (uint32_t neighborId : it->second)
+    {
+        double score = 0.0;
+        auto qualityIt = g_state.linkQuality.find({nodeId, neighborId});
+        if (qualityIt != g_state.linkQuality.end())
+        {
+            score = qualityIt->second;
+        }
+        score += static_cast<double>(neighbors.count(neighborId) ? neighbors.at(neighborId).size()
+                                                                 : 0u) *
+                 0.01;
+        if (score > bestScore || (std::abs(score - bestScore) < 1e-9 &&
+                                  (bestNeighbor < 0 ||
+                                   neighborId < static_cast<uint32_t>(bestNeighbor))))
+        {
+            bestScore = score;
+            bestNeighbor = static_cast<int32_t>(neighborId);
+        }
+    }
+    return bestNeighbor;
+}
+
+void UpdateNetworkPressureMetrics(const std::map<uint32_t, std::vector<uint32_t>>& previousNeighbors,
+                                  const std::map<uint32_t, std::vector<uint32_t>>& currentNeighbors)
+{
+    const uint32_t n = g_uavNodes.GetN();
+    uint32_t changedLinks = 0;
+    for (uint32_t i = 0; i < n; ++i)
+    {
+        std::set<uint32_t> prevSet;
+        std::set<uint32_t> currSet;
+        auto prevIt = previousNeighbors.find(i);
+        if (prevIt != previousNeighbors.end())
+        {
+            prevSet.insert(prevIt->second.begin(), prevIt->second.end());
+        }
+        auto currIt = currentNeighbors.find(i);
+        if (currIt != currentNeighbors.end())
+        {
+            currSet.insert(currIt->second.begin(), currIt->second.end());
+        }
+
+        std::vector<uint32_t> diff;
+        std::set_symmetric_difference(prevSet.begin(),
+                                      prevSet.end(),
+                                      currSet.begin(),
+                                      currSet.end(),
+                                      std::back_inserter(diff));
+        changedLinks += static_cast<uint32_t>(diff.size());
+    }
+    changedLinks /= 2;
+
+    uint32_t relaySwitches = 0;
+    std::map<uint32_t, int32_t> currentPreferredRelay;
+    for (uint32_t i = 0; i < n; ++i)
+    {
+        const int32_t preferred = SelectPreferredRelayForNode(i, currentNeighbors);
+        currentPreferredRelay[i] = preferred;
+        auto prevRelayIt = g_cooperativeRuntime.previousPreferredRelay.find(i);
+        if (prevRelayIt != g_cooperativeRuntime.previousPreferredRelay.end() &&
+            prevRelayIt->second >= 0 && preferred >= 0 && prevRelayIt->second != preferred)
+        {
+            relaySwitches++;
+        }
+    }
+
+    g_cooperativeRuntime.previousPreferredRelay = std::move(currentPreferredRelay);
+    g_cooperativeRuntime.previousNeighbors = currentNeighbors;
+
+    const uint32_t weightedRouteChanges =
+        static_cast<uint32_t>(std::round(changedLinks * g_environmentSummary.reroutePressureFactor));
+    const uint32_t weightedRelaySwitches =
+        static_cast<uint32_t>(std::round(relaySwitches *
+                                         g_environmentSummary.relayInstabilityFactor));
+
+    g_cooperativeRuntime.routeChangeCount += weightedRouteChanges;
+    g_cooperativeRuntime.relaySwitchCount += weightedRelaySwitches;
+    g_cooperativeRuntime.lastRoutePressureScore =
+        weightedRouteChanges + weightedRelaySwitches +
+        (g_cooperativeRuntime.failureActive || g_cooperativeRuntime.recoveryActive
+             ? g_environmentSummary.formationReconfigPenalty
+             : 0.0);
 }
 
 void MarkCooperativeResponseStarted(double now)
@@ -463,6 +782,7 @@ void ApplyCooperativeFailureState()
     g_cooperativeRuntime.failureActive = failureActive;
     if (failureActive && !g_cooperativeRuntime.lastFailureActiveState)
     {
+        g_cooperativeRuntime.frozenFailureNeighborhoodNodes = BuildFailureNeighborhoodNodes(false);
         g_cooperativeRuntime.currentFailureActivationTime = Simulator::Now().GetSeconds();
         g_cooperativeRuntime.lastRecoveryTriggerTime = -1.0;
         g_cooperativeRuntime.lastRecoveryActionTime = -1.0;
@@ -481,6 +801,7 @@ void ApplyCooperativeFailureState()
     }
     if (!failureActive)
     {
+        g_cooperativeRuntime.frozenFailureNeighborhoodNodes.clear();
         if (!g_cooperativeRuntime.recoveryActive && !g_cooperativeRuntime.stabilizationActive &&
             g_cooperativeRuntime.recoveryCompletedAt < 0.0)
         {
@@ -832,6 +1153,20 @@ bool IsStabilizationWindowSatisfied(double now)
         return false;
     }
 
+    const auto& lastSample = g_cooperativeRuntime.metricsHistory.back();
+    for (const auto& sample : g_cooperativeRuntime.metricsHistory)
+    {
+        if (sample.time + 1e-9 < windowStart)
+        {
+            continue;
+        }
+        if (lastSample.routeChangeCount > sample.routeChangeCount ||
+            lastSample.relaySwitchCount > sample.relaySwitchCount)
+        {
+            return false;
+        }
+    }
+
     if (g_cooperativeRuntime.baselineValid &&
         !std::isnan(g_cooperativeRuntime.baselineThroughputMbps) &&
         g_cooperativeRuntime.baselineThroughputMbps > 1e-6)
@@ -1013,7 +1348,14 @@ bool ShouldTriggerRecovery(const CooperativeNetworkStateSnapshot& snapshot)
         return false;
     }
 
-    return !IsRecoveryCriteriaSatisfied(snapshot);
+    if (!IsRecoveryCriteriaSatisfied(snapshot))
+    {
+        return true;
+    }
+
+    const double pressureThreshold =
+        2.5 * std::max(1.0, g_environmentSummary.reroutePressureFactor);
+    return g_cooperativeRuntime.lastRoutePressureScore >= pressureThreshold;
 }
 
 EffectiveRecoveryDecision ResolveEffectiveRecoveryDecision()
@@ -1145,6 +1487,18 @@ void RecordCooperativeRecoveryMetrics(const CooperativeNetworkStateSnapshot& sna
     metrics.activeNodeCount = snapshot.activeNodeCount;
     metrics.leaderNodeId = g_cooperativeRuntime.activeLeaderNodeId;
     metrics.isLeaderAlive = g_cooperativeRuntime.leaderAlive;
+    metrics.routeChangeCount = g_cooperativeRuntime.routeChangeCount;
+    metrics.relaySwitchCount = g_cooperativeRuntime.relaySwitchCount;
+    const double controlDelayThresholdMs =
+        (g_config.maxEndToEndDelay * 1000.0) /
+        std::max(1.0, g_environmentSummary.controlMessageUrgencyFactor);
+    if ((g_cooperativeRuntime.failureActive || g_cooperativeRuntime.recoveryActive) &&
+        snapshot.avgDelayMs > controlDelayThresholdMs)
+    {
+        g_cooperativeRuntime.controlDeadlineMissCount++;
+    }
+    metrics.controlDeadlineMissCount = g_cooperativeRuntime.controlDeadlineMissCount;
+    metrics.routePressureScore = g_cooperativeRuntime.lastRoutePressureScore;
     if (!std::isnan(g_cooperativeRuntime.responseTimeSec))
     {
         metrics.responseTimeSec = g_cooperativeRuntime.responseTimeSec;
@@ -1194,6 +1548,10 @@ void RecordCooperativeRecoveryMetrics(const CooperativeNetworkStateSnapshot& sna
         g_cooperativeRecoveryMetricsLog << metrics.stabilizationTimeSec;
     }
     g_cooperativeRecoveryMetricsLog << ",";
+    g_cooperativeRecoveryMetricsLog << metrics.routeChangeCount << ","
+                                    << metrics.relaySwitchCount << ","
+                                    << metrics.controlDeadlineMissCount << ","
+                                    << metrics.routePressureScore << ",";
     if (std::isnan(metrics.failureNeighborhoodPdr))
     {
         g_cooperativeRecoveryMetricsLog << "nan";
@@ -1383,7 +1741,9 @@ std::set<uint32_t> BuildRecoveryScopeNodes()
 FailureNeighborhoodMetrics CollectFailureNeighborhoodMetrics()
 {
     FailureNeighborhoodMetrics metrics;
-    std::set<uint32_t> scope = BuildFailureNeighborhoodNodes(false);
+    std::set<uint32_t> scope = g_cooperativeRuntime.frozenFailureNeighborhoodNodes.empty()
+                                  ? BuildFailureNeighborhoodNodes(false)
+                                  : g_cooperativeRuntime.frozenFailureNeighborhoodNodes;
     if (scope.empty())
     {
         return metrics;
@@ -1458,10 +1818,11 @@ void LocalChannelReallocationForNodes(const std::set<uint32_t>& scope)
                 if (g_state.channelAssignment.count(neighborId) &&
                     g_state.channelAssignment[neighborId] == ch)
                 {
-                    double dist = CalculateDistance(g_uavNodes.Get(nodeId), g_uavNodes.Get(neighborId));
                     double rxDbm = (g_state.powerAssignment.count(neighborId) ?
                                     g_state.powerAssignment[neighborId] : 20.0) -
-                                   CalculatePathLoss(dist);
+                                   CalculatePathLoss(
+                                       g_uavNodes.Get(nodeId)->GetObject<MobilityModel>()->GetPosition(),
+                                       g_uavNodes.Get(neighborId)->GetObject<MobilityModel>()->GetPosition());
                     score += std::pow(10.0, rxDbm / 10.0);
                 }
             }
@@ -1849,6 +2210,7 @@ void BuildGraphRepresentationForWindow(const std::vector<InferredTopologyEdge>& 
 void UpdateTopology() {
     ApplyCooperativeFailureState();
     uint32_t n = g_uavNodes.GetN();
+    const auto previousNeighbors = g_state.neighbors;
     g_state.adjacencyMatrix.clear();
     g_state.adjacencyMatrix.resize(n, std::vector<bool>(n, false));
     g_state.neighbors.clear();
@@ -1864,7 +2226,12 @@ void UpdateTopology() {
                 continue;
             }
             double dist = CalculateDistance(g_uavNodes.Get(i), g_uavNodes.Get(j));
-            double linkRange = commRange * GetCooperativeRangeFactorForLink(i, j);
+            const Vector srcPos =
+                g_uavNodes.Get(i)->GetObject<MobilityModel>()->GetPosition();
+            const Vector dstPos =
+                g_uavNodes.Get(j)->GetObject<MobilityModel>()->GetPosition();
+            double linkRange = commRange * GetUrbanAltitudeRangeFactor(srcPos, dstPos) *
+                               GetCooperativeRangeFactorForLink(i, j);
 
             if (dist <= linkRange) {
                 g_state.adjacencyMatrix[i][j] = true;
@@ -1874,6 +2241,8 @@ void UpdateTopology() {
             }
         }
     }
+
+    UpdateNetworkPressureMetrics(previousNeighbors, g_state.neighbors);
 }
 
 // ==================== SINR 计算工具 ====================
@@ -1892,6 +2261,15 @@ inline double mwToDbm(double mW) {
 double CalculatePathLoss(double dist) {
     if (dist < 1.0) dist = 1.0;
     return 46.68 + 10.0 * g_pathLossExponent * std::log10(dist);
+}
+
+double CalculatePathLoss(const Vector& src, const Vector& dst) {
+    const double dx = dst.x - src.x;
+    const double dy = dst.y - src.y;
+    const double dz = dst.z - src.z;
+    const double dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+    return CalculatePathLoss(dist) + EstimateWaterSurfaceVolatilityLossDb(src, dst) +
+           EstimateUrbanAltitudeAdjustmentDb(src, dst);
 }
 
 /**
@@ -1945,10 +2323,11 @@ double CalculateInterference_mW(uint32_t dstId, uint32_t excludeId,
         }
         
         // k 是隐藏终端：无法感知发送方，可能同时发送
-        double dist = CalculateDistance(g_uavNodes.Get(k), g_uavNodes.Get(dstId));
         double txK  = g_state.powerAssignment.count(k) ? 
                       g_state.powerAssignment[k] : 20.0;
-        double rxK  = txK - CalculatePathLoss(dist);
+        double rxK  = txK - CalculatePathLoss(
+                                 g_uavNodes.Get(k)->GetObject<MobilityModel>()->GetPosition(),
+                                 g_uavNodes.Get(dstId)->GetObject<MobilityModel>()->GetPosition());
         
         if (rxK > -100.0) {
             total_mW += dBmToMw(rxK);
@@ -1957,12 +2336,15 @@ double CalculateInterference_mW(uint32_t dstId, uint32_t excludeId,
     
     // ---- 来自黑飞节点的干扰（同样考虑 CSMA）----
     for (uint32_t k = 0; k < g_interferenceNodes.GetN(); ++k) {
+        if (IsNonCooperativeEntityNodeStruck(k)) {
+            continue;
+        }
         double distToSender = CalculateDistance(
             g_interferenceNodes.Get(k), g_uavNodes.Get(excludeId));
         
-        double dist = CalculateDistance(
-            g_interferenceNodes.Get(k), g_uavNodes.Get(dstId));
-        double rxK  = 30.0 - CalculatePathLoss(dist);
+        double rxK  = 30.0 - CalculatePathLoss(
+                                 g_interferenceNodes.Get(k)->GetObject<MobilityModel>()->GetPosition(),
+                                 g_uavNodes.Get(dstId)->GetObject<MobilityModel>()->GetPosition());
         
         if (rxK > -100.0) {
             if (distToSender <= csRange) {
@@ -1992,12 +2374,12 @@ double EstimateSINR(uint32_t srcId, uint32_t dstId, int channelFilter) {
     {
         return -100.0;
     }
-    double dist = CalculateDistance(g_uavNodes.Get(srcId), g_uavNodes.Get(dstId));
-    
     // 信号功率
     double txPower     = g_state.powerAssignment.count(srcId) ?
                          g_state.powerAssignment[srcId] : 20.0;
-    double rxPower_dBm = txPower - CalculatePathLoss(dist) -
+    double rxPower_dBm = txPower - CalculatePathLoss(
+                                       g_uavNodes.Get(srcId)->GetObject<MobilityModel>()->GetPosition(),
+                                       g_uavNodes.Get(dstId)->GetObject<MobilityModel>()->GetPosition()) -
                          GetCooperativeExtraPathLossDb(srcId, dstId);
     double signal_mW   = dBmToMw(rxPower_dBm);
     
@@ -2045,7 +2427,12 @@ double RateToMinSINR(double rate) {
 double EstimateLinkQuality(uint32_t srcId, uint32_t dstId) {
     double dist = CalculateDistance(g_uavNodes.Get(srcId), g_uavNodes.Get(dstId));
     if (IsNodeCurrentlyFailed(srcId) || IsNodeCurrentlyFailed(dstId)) return 0.0;
-    if (dist > 150.0 * GetCooperativeRangeFactorForLink(srcId, dstId)) return 0.0;
+    const Vector srcPos =
+        g_uavNodes.Get(srcId)->GetObject<MobilityModel>()->GetPosition();
+    const Vector dstPos =
+        g_uavNodes.Get(dstId)->GetObject<MobilityModel>()->GetPosition();
+    if (dist > 150.0 * GetUrbanAltitudeRangeFactor(srcPos, dstPos) *
+                   GetCooperativeRangeFactorForLink(srcId, dstId)) return 0.0;
     
     double sinr = EstimateSINR(srcId, dstId);
     
@@ -2091,11 +2478,11 @@ void DynamicChannelAllocation() {
             for (uint32_t neighborId : g_state.neighbors[nodeId]) {
                 auto it = g_state.channelAssignment.find(neighborId);
                 if (it != g_state.channelAssignment.end() && it->second == ch) {
-                    double dist = CalculateDistance(
-                        g_uavNodes.Get(nodeId), g_uavNodes.Get(neighborId));
                     double txK = g_state.powerAssignment.count(neighborId) ?
                                  g_state.powerAssignment[neighborId] : 20.0;
-                    double rxPower = txK - CalculatePathLoss(dist);
+                    double rxPower = txK - CalculatePathLoss(
+                                               g_uavNodes.Get(nodeId)->GetObject<MobilityModel>()->GetPosition(),
+                                               g_uavNodes.Get(neighborId)->GetObject<MobilityModel>()->GetPosition());
                     // ★ 用实际功率级别评分，而非线性距离权重
                     channelInterference[ch] += dBmToMw(rxPower);
                 }
@@ -2112,7 +2499,9 @@ void DynamicChannelAllocation() {
                         if (dist < 225.0) {  // 1.5 × commRange
                             double txK = g_state.powerAssignment.count(twoHop) ?
                                          g_state.powerAssignment[twoHop] : 20.0;
-                            double rxPower = txK - CalculatePathLoss(dist);
+                            double rxPower = txK - CalculatePathLoss(
+                                                       g_uavNodes.Get(nodeId)->GetObject<MobilityModel>()->GetPosition(),
+                                                       g_uavNodes.Get(twoHop)->GetObject<MobilityModel>()->GetPosition());
                             channelInterference[ch] += dBmToMw(rxPower) * 0.3;
                         }
                     }

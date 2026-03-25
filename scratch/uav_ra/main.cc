@@ -9,6 +9,7 @@
  */
 
 #include "context.h"
+#include "non_cooperative_attack.h"
 
 NS_LOG_COMPONENT_DEFINE("UAVResourceAllocation");
 
@@ -23,6 +24,7 @@ std::vector<SceneOverlayRegion> g_waterRegions;
 std::vector<SceneOverlayRegion> g_openFieldRegions;
 ObservationRuntimeState g_observationRuntime;
 CooperativeRuntimeState g_cooperativeRuntime;
+NonCooperativeAttackRuntimeState g_nonCooperativeAttackRuntime;
 Ptr<UniformRandomVariable> g_randVar;
 double g_pathLossExponent = 2.0;
 
@@ -52,6 +54,10 @@ std::ofstream g_observedLinkEvidenceLog;
 std::ofstream g_inferredTopologyEdgesLog;
 std::ofstream g_inferredGraphNodesLog;
 std::ofstream g_keyNodeCandidatesLog;
+std::ofstream g_nonCooperativeAttackRecommendationsLog;
+std::ofstream g_nonCooperativeAttackEventsLog;
+std::ofstream g_nonCooperativeTargetBindingLog;
+std::ofstream g_nonCooperativeAttackEffectMetricsLog;
 std::ofstream g_cooperativeFailureEventsLog;
 std::ofstream g_cooperativeRecoveryActionsLog;
 std::ofstream g_cooperativeRecoveryMetricsLog;
@@ -96,6 +102,8 @@ int main(int argc, char* argv[])
     std::string recoveryPolicyArg = "global_recovery";
     RecoveryObjective recoveryObjective = RecoveryObjective::Connectivity;
     std::string recoveryObjectiveArg = "connectivity";
+    NonCooperativeAttackType nonCooperativeAttackType = NonCooperativeAttackType::NodeStrike;
+    std::string nonCooperativeAttackTypeArg = "node_strike";
     // 编队模式参数 (空=随机游走, v_formation/cross/line/triangle=编队轨迹)
     std::string formation = "";
     // 难度参数: Easy / Moderate / Hard  (对应 benchmark 三级配置)
@@ -117,6 +125,12 @@ int main(int argc, char* argv[])
     bool allowRelayReselection = true;
     bool allowSlotReallocation = true;
     bool allowRouteRebuild = true;
+    bool enableNonCooperativeAttack = false;
+    int32_t manualStrikeTarget = -1;
+    double attackExecuteTime = -1.0;
+    double attackEvaluationDuration = 12.0;
+    uint32_t attackNeighborhoodHop = 1;
+    SceneRealismOverrides sceneRealismOverrides;
     
     // 解析命令行参数
     CommandLine cmd;
@@ -155,6 +169,46 @@ int main(int argc, char* argv[])
     cmd.AddValue("allowRelayReselection", "允许邻居/中继切换", allowRelayReselection);
     cmd.AddValue("allowSlotReallocation", "允许 TDMA 时隙重分配", allowSlotReallocation);
     cmd.AddValue("allowRouteRebuild", "允许路由重构", allowRouteRebuild);
+    cmd.AddValue("enableNonCooperativeAttack",
+                 "是否启用非合作打击推荐与执行链",
+                 enableNonCooperativeAttack);
+    cmd.AddValue("attackType", "非合作打击类型", nonCooperativeAttackTypeArg);
+    cmd.AddValue("manualStrikeTarget",
+                 "非合作模式用户主动指定的 observedNodeId",
+                 manualStrikeTarget);
+    cmd.AddValue("attackExecuteTime", "非合作模式打击执行时间", attackExecuteTime);
+    cmd.AddValue("attackEvaluationDuration", "非合作模式打击评估窗口时长",
+                 attackEvaluationDuration);
+    cmd.AddValue("attackNeighborhoodHop", "非合作模式目标邻域 hop 定义",
+                 attackNeighborhoodHop);
+    cmd.AddValue("urbanAltitudePenaltyDbLow", "urban 低空附加损耗(dB)",
+                 sceneRealismOverrides.urbanAltitudePenaltyDbLow);
+    cmd.AddValue("urbanAltitudeGainDbHigh", "urban 高空增益(dB)",
+                 sceneRealismOverrides.urbanAltitudeGainDbHigh);
+    cmd.AddValue("urbanStreetCanyonFactor", "urban 街谷影响因子",
+                 sceneRealismOverrides.urbanStreetCanyonFactor);
+    cmd.AddValue("lakeVolatilityJitterDb", "lake 水面波动抖动(dB)",
+                 sceneRealismOverrides.lakeVolatilityJitterDb);
+    cmd.AddValue("lakeDeepFadeProbability", "lake 深衰落概率",
+                 sceneRealismOverrides.lakeDeepFadeProbability);
+    cmd.AddValue("lakeDeepFadeMaxDb", "lake 深衰落最大附加损耗(dB)",
+                 sceneRealismOverrides.lakeDeepFadeMaxDb);
+    cmd.AddValue("lakeReflectionDelayJitterMs", "lake 反射时延抖动(ms)",
+                 sceneRealismOverrides.lakeReflectionDelayJitterMs);
+    cmd.AddValue("carrierFrequencyGHz", "载频(GHz)",
+                 sceneRealismOverrides.carrierFrequencyGHz);
+    cmd.AddValue("channelBandwidthMHz", "信道带宽(MHz)",
+                 sceneRealismOverrides.channelBandwidthMHz);
+    cmd.AddValue("polarizationMode", "极化模式(horizontal/vertical/circular)",
+                 sceneRealismOverrides.polarizationMode);
+    cmd.AddValue("reroutePressureFactor", "网络层重路由压力因子",
+                 sceneRealismOverrides.reroutePressureFactor);
+    cmd.AddValue("controlMessageUrgencyFactor", "控制消息时效压力因子",
+                 sceneRealismOverrides.controlMessageUrgencyFactor);
+    cmd.AddValue("relayInstabilityFactor", "中继不稳定性因子",
+                 sceneRealismOverrides.relayInstabilityFactor);
+    cmd.AddValue("formationReconfigPenalty", "编队重构压力因子",
+                 sceneRealismOverrides.formationReconfigPenalty);
     cmd.AddValue("formation", "编队模式 (v_formation/cross/line/triangle，空=随机游走)", formation);
     cmd.AddValue("sceneType", "场景类型 (urban/forest/lake/open-field，空=自动推断)", sceneType);
     cmd.AddValue("difficulty","难度等级 (Easy/Moderate/Hard)", difficulty);
@@ -226,6 +280,12 @@ int main(int argc, char* argv[])
                   << "，仅支持 connectivity / delay / throughput / pdr" << std::endl;
         return 1;
     }
+    if (!TryParseNonCooperativeAttackType(nonCooperativeAttackTypeArg, nonCooperativeAttackType))
+    {
+        std::cerr << "无效 attackType: " << nonCooperativeAttackTypeArg
+                  << "，当前仅支持 node_strike" << std::endl;
+        return 1;
+    }
 
     CooperativeControlConfig cooperativeConfig;
     cooperativeConfig.communicationMode = communicationMode;
@@ -245,6 +305,31 @@ int main(int argc, char* argv[])
     cooperativeConfig.allowRelayReselection = allowRelayReselection;
     cooperativeConfig.allowSlotReallocation = allowSlotReallocation;
     cooperativeConfig.allowRouteRebuild = allowRouteRebuild;
+
+    NonCooperativeAttackConfig nonCooperativeAttackConfig;
+    nonCooperativeAttackConfig.enabled = enableNonCooperativeAttack;
+    nonCooperativeAttackConfig.attackType = nonCooperativeAttackType;
+    nonCooperativeAttackConfig.manualStrikeTarget = manualStrikeTarget;
+    nonCooperativeAttackConfig.attackExecuteTime = attackExecuteTime;
+    nonCooperativeAttackConfig.attackEvaluationDuration =
+        std::max(1.0, attackEvaluationDuration);
+    nonCooperativeAttackConfig.attackNeighborhoodHop =
+        std::max<uint32_t>(1, attackNeighborhoodHop);
+    sceneRealismOverrides.enabled =
+        sceneRealismOverrides.urbanAltitudePenaltyDbLow >= 0.0 ||
+        sceneRealismOverrides.urbanAltitudeGainDbHigh >= 0.0 ||
+        sceneRealismOverrides.urbanStreetCanyonFactor >= 0.0 ||
+        sceneRealismOverrides.lakeVolatilityJitterDb >= 0.0 ||
+        sceneRealismOverrides.lakeDeepFadeProbability >= 0.0 ||
+        sceneRealismOverrides.lakeDeepFadeMaxDb >= 0.0 ||
+        sceneRealismOverrides.lakeReflectionDelayJitterMs >= 0.0 ||
+        sceneRealismOverrides.carrierFrequencyGHz > 0.0 ||
+        sceneRealismOverrides.channelBandwidthMHz > 0.0 ||
+        !sceneRealismOverrides.polarizationMode.empty() ||
+        sceneRealismOverrides.reroutePressureFactor >= 0.0 ||
+        sceneRealismOverrides.controlMessageUrgencyFactor >= 0.0 ||
+        sceneRealismOverrides.relayInstabilityFactor >= 0.0 ||
+        sceneRealismOverrides.formationReconfigPenalty >= 0.0;
     
     // 如果指定了编队模式，尝试加载轨迹文件
     bool useFormation = false;
@@ -294,6 +379,22 @@ int main(int argc, char* argv[])
         std::cout << "恢复目标: " << RecoveryObjectiveToString(cooperativeConfig.recoveryObjective)
                   << std::endl;
     }
+    else
+    {
+        std::cout << "非合作打击链: "
+                  << (nonCooperativeAttackConfig.enabled ? "enabled" : "disabled")
+                  << std::endl;
+        if (nonCooperativeAttackConfig.enabled)
+        {
+            std::cout << "打击类型: "
+                      << NonCooperativeAttackTypeToString(nonCooperativeAttackConfig.attackType)
+                      << std::endl;
+            std::cout << "手工目标: " << nonCooperativeAttackConfig.manualStrikeTarget
+                      << std::endl;
+            std::cout << "执行时间: " << nonCooperativeAttackConfig.attackExecuteTime
+                      << " s" << std::endl;
+        }
+    }
     std::cout << "难度等级: " << difficulty << std::endl;
     std::cout << "目标PDR: " << g_config.targetPDR * 100 << "%" << std::endl;
     std::cout << "最大时延: " << g_config.maxEndToEndDelay * 1000 << " ms" << std::endl;
@@ -309,6 +410,8 @@ int main(int argc, char* argv[])
                                   useFormation ? formation : "random_walk",
                                   mapFile,
                                   cooperativeConfig,
+                                  nonCooperativeAttackConfig,
+                                  sceneRealismOverrides,
                                   customPathLossExp,
                                   customRxSensitivity,
                                   customTxPower);
@@ -326,6 +429,22 @@ int main(int argc, char* argv[])
                   << ", recovery=" << g_environmentSummary.recoveryPolicy
                   << std::endl;
     }
+    else if (g_environmentSummary.nonCooperativeAttackEnabled)
+    {
+        std::cout << "非合作打击摘要: type="
+                  << g_environmentSummary.nonCooperativeAttackType
+                  << ", manualTarget=" << g_environmentSummary.manualStrikeTarget
+                  << ", executeTime=" << g_environmentSummary.attackExecuteTime
+                  << std::endl;
+    }
+
+    if (operationMode == OperationMode::NonCooperative &&
+        g_environmentConfig.nonCooperativeAttackConfig.enabled)
+    {
+        InitializeNonCooperativeAttackState();
+        NonCooperativeAttackPlan initialPlan;
+        BuildCurrentNonCooperativeAttackPlan(initialPlan);
+    }
     
     // 调度资源分配和监控 (Align start time with QoS monitoring)
     Simulator::Schedule(Seconds(0.1), &PerformResourceReallocation);
@@ -337,6 +456,13 @@ int main(int argc, char* argv[])
         Simulator::Schedule(Seconds(0.1), &MonitorObservedSignalEvents);
         Simulator::Schedule(Seconds(g_environmentConfig.observationPreset.windowDurationSec),
                             &UpdateObservedTrackStates);
+        if (g_environmentConfig.nonCooperativeAttackConfig.enabled)
+        {
+            Simulator::Schedule(Seconds(g_environmentConfig.observationPreset.windowDurationSec),
+                                &UpdateNonCooperativeAttackRecommendations);
+            Simulator::Schedule(Seconds(0.1), &MonitorNonCooperativeAttackExecution);
+            Simulator::Schedule(Seconds(0.1), &MonitorNonCooperativeAttackEffectMetrics);
+        }
     }
     Simulator::Schedule(Seconds(0.1), &LogPositions); // 启动位置记录
     

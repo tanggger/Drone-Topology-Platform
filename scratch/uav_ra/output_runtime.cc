@@ -20,6 +20,11 @@ bool IsCooperativeMode()
     return g_environmentConfig.operationMode == OperationMode::Cooperative;
 }
 
+bool IsNonCooperativeAttackEnabled()
+{
+    return IsNonCooperativeMode() && g_environmentConfig.nonCooperativeAttackConfig.enabled;
+}
+
 std::string JsonEscape(const std::string& value)
 {
     std::string escaped;
@@ -242,6 +247,11 @@ void WriteCooperativeMetricsTimeseriesJson()
         out << "      \"activeNodeCount\": " << sample.activeNodeCount << ",\n";
         out << "      \"leaderNodeId\": " << sample.leaderNodeId << ",\n";
         out << "      \"isLeaderAlive\": " << BoolToJson(sample.isLeaderAlive) << ",\n";
+        out << "      \"routeChangeCount\": " << sample.routeChangeCount << ",\n";
+        out << "      \"relaySwitchCount\": " << sample.relaySwitchCount << ",\n";
+        out << "      \"controlDeadlineMissCount\": " << sample.controlDeadlineMissCount
+            << ",\n";
+        out << "      \"routePressureScore\": " << sample.routePressureScore << ",\n";
         if (std::isnan(sample.responseTimeSec))
         {
             out << "      \"responseTimeSec\": null,\n";
@@ -339,6 +349,11 @@ void WriteCooperativeDashboardSnapshotJson(double pdr = 0.0,
     out << "  \"leaderNodeId\": " << g_cooperativeRuntime.activeLeaderNodeId << ",\n";
     out << "  \"backupLeaderId\": " << g_cooperativeRuntime.activeBackupLeaderNodeId << ",\n";
     out << "  \"isLeaderAlive\": " << BoolToJson(g_cooperativeRuntime.leaderAlive) << ",\n";
+    out << "  \"routeChangeCount\": " << g_cooperativeRuntime.routeChangeCount << ",\n";
+    out << "  \"relaySwitchCount\": " << g_cooperativeRuntime.relaySwitchCount << ",\n";
+    out << "  \"controlDeadlineMissCount\": " << g_cooperativeRuntime.controlDeadlineMissCount
+        << ",\n";
+    out << "  \"routePressureScore\": " << g_cooperativeRuntime.lastRoutePressureScore << ",\n";
     out << "  \"failureActive\": " << BoolToJson(g_cooperativeRuntime.failureActive) << ",\n";
     out << "  \"failureType\": \"" << g_environmentSummary.cooperativeFailureType << "\",\n";
     out << "  \"failureTargetId\": " << g_environmentSummary.failureTargetId << ",\n";
@@ -395,6 +410,226 @@ void WriteCooperativeJsonSkeletons()
     WriteCooperativeDashboardSnapshotJson();
 }
 
+struct AttackPhaseAggregate
+{
+    uint32_t count = 0;
+    double connectivitySum = 0.0;
+    double pdrSum = 0.0;
+    double throughputSum = 0.0;
+    double delaySum = 0.0;
+    double maxDamageDuration = 0.0;
+    double maxRecoveryProgress = 0.0;
+};
+
+AttackPhaseAggregate AggregateAttackMetrics(const std::string& phase,
+                                           const std::string& targetScope)
+{
+    AttackPhaseAggregate agg;
+    for (const auto& sample : g_nonCooperativeAttackRuntime.effectMetrics)
+    {
+        if (sample.phase != phase || sample.targetScope != targetScope)
+        {
+            continue;
+        }
+        agg.count++;
+        agg.connectivitySum += sample.connectivityRatio;
+        agg.pdrSum += sample.pdr;
+        agg.throughputSum += sample.throughputMbps;
+        agg.delaySum += sample.delayMs;
+        if (std::isfinite(sample.damageDuration))
+        {
+            agg.maxDamageDuration = std::max(agg.maxDamageDuration, sample.damageDuration);
+        }
+        if (std::isfinite(sample.recoveryProgress))
+        {
+            agg.maxRecoveryProgress = std::max(agg.maxRecoveryProgress, sample.recoveryProgress);
+        }
+    }
+    return agg;
+}
+
+void WriteAttackAggregateJson(std::ofstream& out,
+                              const std::string& phase,
+                              const std::string& targetScope,
+                              bool withTrailingComma)
+{
+    const AttackPhaseAggregate agg = AggregateAttackMetrics(phase, targetScope);
+    out << "      \"" << targetScope << "\": {";
+    if (agg.count == 0)
+    {
+        out << "\"count\": 0, \"connectivityRatio\": null, \"pdr\": null, "
+               "\"throughputMbps\": null, \"delayMs\": null, "
+               "\"maxDamageDuration\": null, \"maxRecoveryProgress\": null}";
+    }
+    else
+    {
+        out << "\"count\": " << agg.count
+            << ", \"connectivityRatio\": " << (agg.connectivitySum / agg.count)
+            << ", \"pdr\": " << (agg.pdrSum / agg.count)
+            << ", \"throughputMbps\": " << (agg.throughputSum / agg.count)
+            << ", \"delayMs\": " << (agg.delaySum / agg.count)
+            << ", \"maxDamageDuration\": " << agg.maxDamageDuration
+            << ", \"maxRecoveryProgress\": " << agg.maxRecoveryProgress << "}";
+    }
+    if (withTrailingComma)
+    {
+        out << ",";
+    }
+    out << "\n";
+}
+
+void WriteNonCooperativeAttackPlanJson()
+{
+    if (!IsNonCooperativeAttackEnabled())
+    {
+        return;
+    }
+
+    std::ofstream out(g_config.outputDir + "/noncooperative_attack_plan.json");
+    const auto& plan = g_nonCooperativeAttackRuntime.attackPlan;
+    out << "{\n";
+    out << "  \"operationMode\": \"" << JsonEscape(plan.operationMode) << "\",\n";
+    out << "  \"sceneType\": \"" << JsonEscape(plan.sceneType) << "\",\n";
+    out << "  \"attackType\": \"" << JsonEscape(plan.attackType) << "\",\n";
+    out << "  \"recommendedObservedNodeId\": " << plan.recommendedObservedNodeId << ",\n";
+    out << "  \"confirmedObservedNodeId\": " << plan.confirmedObservedNodeId << ",\n";
+    out << "  \"userTriggeredExecution\": " << BoolToJson(plan.userTriggeredExecution) << ",\n";
+    out << "  \"attackExecuteTime\": " << plan.attackExecuteTime << ",\n";
+    out << "  \"targetBindingStatus\": \"" << JsonEscape(plan.targetBindingStatus) << "\",\n";
+    if (std::isnan(plan.strikeExecuteTime))
+    {
+        out << "  \"strikeExecuteTime\": null,\n";
+    }
+    else
+    {
+        out << "  \"strikeExecuteTime\": " << plan.strikeExecuteTime << ",\n";
+    }
+    out << "  \"strikeMode\": \"" << JsonEscape(plan.strikeMode) << "\",\n";
+    out << "  \"evaluationWindowStart\": " << plan.evaluationWindowStart << ",\n";
+    out << "  \"evaluationWindowEnd\": " << plan.evaluationWindowEnd << ",\n";
+    out << "  \"executedObservedNodeId\": "
+        << g_nonCooperativeAttackRuntime.executedObservedNodeId << ",\n";
+    out << "  \"executedEntityNodeId\": "
+        << g_nonCooperativeAttackRuntime.executedEntityNodeId << ",\n";
+    out << "  \"executedTargetObjectKey\": "
+        << g_nonCooperativeAttackRuntime.executedTargetObjectKey << ",\n";
+    out << "  \"targetNeighborhoodSize\": "
+        << g_nonCooperativeAttackRuntime.targetNeighborhoodEntityNodeIds.size() << "\n";
+    out << "}\n";
+}
+
+void WriteNonCooperativePrePostComparisonJson()
+{
+    if (!IsNonCooperativeAttackEnabled())
+    {
+        return;
+    }
+
+    std::ofstream out(g_config.outputDir + "/noncooperative_pre_post_comparison.json");
+    out << "{\n";
+    out << "  \"phaseMetrics\": {\n";
+    const std::vector<std::string> phases = {"pre_attack", "immediate_post_attack", "recovery", "final"};
+    for (size_t i = 0; i < phases.size(); ++i)
+    {
+        out << "    \"" << phases[i] << "\": {\n";
+        WriteAttackAggregateJson(out, phases[i], "global", true);
+        WriteAttackAggregateJson(out, phases[i], "target_neighborhood", false);
+        out << "    }";
+        if (i + 1 < phases.size())
+        {
+            out << ",";
+        }
+        out << "\n";
+    }
+    out << "  },\n";
+
+    const auto lastGlobal = std::find_if(
+        g_nonCooperativeAttackRuntime.effectMetrics.rbegin(),
+        g_nonCooperativeAttackRuntime.effectMetrics.rend(),
+        [](const NonCooperativeAttackEffectMetric& sample) {
+            return sample.targetScope == "global";
+        });
+    const auto lastNeighborhood = std::find_if(
+        g_nonCooperativeAttackRuntime.effectMetrics.rbegin(),
+        g_nonCooperativeAttackRuntime.effectMetrics.rend(),
+        [](const NonCooperativeAttackEffectMetric& sample) {
+            return sample.targetScope == "target_neighborhood";
+        });
+
+    out << "  \"finalMetrics\": {\n";
+    out << "    \"global\": {";
+    if (lastGlobal == g_nonCooperativeAttackRuntime.effectMetrics.rend())
+    {
+        out << "\"connectivityRatio\": null, \"pdr\": null, "
+               "\"throughputMbps\": null, \"delayMs\": null}";
+    }
+    else
+    {
+        out << "\"connectivityRatio\": " << lastGlobal->connectivityRatio
+            << ", \"pdr\": " << lastGlobal->pdr
+            << ", \"throughputMbps\": " << lastGlobal->throughputMbps
+            << ", \"delayMs\": " << lastGlobal->delayMs << "}";
+    }
+    out << ",\n";
+    out << "    \"target_neighborhood\": {";
+    if (lastNeighborhood == g_nonCooperativeAttackRuntime.effectMetrics.rend())
+    {
+        out << "\"connectivityRatio\": null, \"pdr\": null, "
+               "\"throughputMbps\": null, \"delayMs\": null}";
+    }
+    else
+    {
+        out << "\"connectivityRatio\": " << lastNeighborhood->connectivityRatio
+            << ", \"pdr\": " << lastNeighborhood->pdr
+            << ", \"throughputMbps\": " << lastNeighborhood->throughputMbps
+            << ", \"delayMs\": " << lastNeighborhood->delayMs << "}";
+    }
+    out << "\n  },\n";
+
+    out << "  \"recoverySummary\": {\n";
+    out << "    \"attackExecuted\": "
+        << BoolToJson(g_nonCooperativeAttackRuntime.attackExecuted) << ",\n";
+    if (std::isnan(g_nonCooperativeAttackRuntime.actualAttackExecutionTime))
+    {
+        out << "    \"actualAttackExecutionTime\": null,\n";
+    }
+    else
+    {
+        out << "    \"actualAttackExecutionTime\": "
+            << g_nonCooperativeAttackRuntime.actualAttackExecutionTime << ",\n";
+    }
+    if (std::isnan(g_nonCooperativeAttackRuntime.recoveryCompletedAt))
+    {
+        out << "    \"recoveryCompletedAt\": null,\n";
+    }
+    else
+    {
+        out << "    \"recoveryCompletedAt\": "
+            << g_nonCooperativeAttackRuntime.recoveryCompletedAt << ",\n";
+    }
+    out << "    \"executedObservedNodeId\": "
+        << g_nonCooperativeAttackRuntime.executedObservedNodeId << ",\n";
+    out << "    \"executedEntityNodeId\": "
+        << g_nonCooperativeAttackRuntime.executedEntityNodeId << ",\n";
+    out << "    \"executedTargetObjectKey\": "
+        << g_nonCooperativeAttackRuntime.executedTargetObjectKey << ",\n";
+    out << "    \"targetNeighborhoodSize\": "
+        << g_nonCooperativeAttackRuntime.targetNeighborhoodEntityNodeIds.size() << ",\n";
+    out << "    \"eventCount\": " << g_nonCooperativeAttackRuntime.attackEvents.size() << "\n";
+    out << "  }\n";
+    out << "}\n";
+}
+
+void WriteNonCooperativeJsonSkeletons()
+{
+    if (!IsNonCooperativeAttackEnabled())
+    {
+        return;
+    }
+    WriteNonCooperativeAttackPlanJson();
+    WriteNonCooperativePrePostComparisonJson();
+}
+
 } // namespace
 
 void InitializeOutputFiles()
@@ -422,6 +657,17 @@ void InitializeOutputFiles()
         g_inferredTopologyEdgesLog.open(g_config.outputDir + "/inferred_topology_edges.csv");
         g_inferredGraphNodesLog.open(g_config.outputDir + "/inferred_graph_nodes.csv");
         g_keyNodeCandidatesLog.open(g_config.outputDir + "/key_node_candidates.csv");
+        if (g_environmentConfig.nonCooperativeAttackConfig.enabled)
+        {
+            g_nonCooperativeAttackRecommendationsLog.open(
+                g_config.outputDir + "/noncooperative_attack_recommendations.csv");
+            g_nonCooperativeAttackEventsLog.open(
+                g_config.outputDir + "/noncooperative_attack_events.csv");
+            g_nonCooperativeTargetBindingLog.open(
+                g_config.outputDir + "/noncooperative_target_binding.csv");
+            g_nonCooperativeAttackEffectMetricsLog.open(
+                g_config.outputDir + "/noncooperative_attack_effect_metrics.csv");
+        }
     }
     if (IsCooperativeMode())
     {
@@ -490,6 +736,35 @@ void InitializeOutputFiles()
                "avgIncidentProbability,avgIncidentConfidence,keyNodeScore,keyNodeMethod,"
                "sceneType,operationMode\n";
     }
+    if (g_nonCooperativeAttackRecommendationsLog.is_open())
+    {
+        g_nonCooperativeAttackRecommendationsLog
+            << "windowStart,windowEnd,recommendedObservedNodeId,recommendedScore,"
+               "recommendationRank,recommendationReason,inferenceMethod,"
+               "weightedDegreeCentrality,weightedBetweennessCentrality,"
+               "weightedClosenessCentrality,weightedPageRank,weightedKShell\n";
+    }
+    if (g_nonCooperativeAttackEventsLog.is_open())
+    {
+        g_nonCooperativeAttackEventsLog
+            << "eventTime,attackType,recommendedObservedNodeId,confirmedObservedNodeId,"
+               "executedObservedNodeId,targetBindingStatus,isTrueTargetHit,"
+               "targetMismatchType,nodeRemoved,executedEntityNodeId,boundTargetObjectKey\n";
+    }
+    if (g_nonCooperativeTargetBindingLog.is_open())
+    {
+        g_nonCooperativeTargetBindingLog
+            << "eventTime,observedNodeId,bindingStatus,bindingConfidence,isTrackStable,"
+               "isTrackActive,boundTargetObjectKey,executedEntityNodeId,"
+               "isTrueCriticalTarget,mismatchType\n";
+    }
+    if (g_nonCooperativeAttackEffectMetricsLog.is_open())
+    {
+        g_nonCooperativeAttackEffectMetricsLog
+            << "time,phase,targetScope,connectivityRatio,pdr,throughputMbps,delayMs,"
+               "damageDuration,recoveryProgress,recommendedObservedNodeId,"
+               "confirmedObservedNodeId,executedObservedNodeId\n";
+    }
     if (g_cooperativeFailureEventsLog.is_open())
     {
         g_cooperativeFailureEventsLog
@@ -508,6 +783,8 @@ void InitializeOutputFiles()
         g_cooperativeRecoveryMetricsLog
             << "time,phase,connectivity,avg_degree,pdr,throughput_mbps,delay_ms,"
                "p99_delay_ms,response_time_sec,recovery_time_sec,stabilization_time_sec,"
+               "route_change_count,relay_switch_count,control_deadline_miss_count,"
+               "route_pressure_score,"
                "failure_neighborhood_pdr,failure_neighborhood_throughput_mbps,"
                "failure_neighborhood_delay_ms,failure_neighborhood_node_count,"
                "failure_target_id,is_failure_target_failed,failure_target_pdr,"
@@ -541,6 +818,7 @@ void InitializeOutputFiles()
     g_qosLog << std::endl;
 
     WriteCooperativeJsonSkeletons();
+    WriteNonCooperativeJsonSkeletons();
 }
 
 void WriteEnvironmentSummaryFile()
@@ -573,6 +851,34 @@ void WriteEnvironmentSummaryFile()
     summary << "  \"connectivityRangeFactor\": "
             << g_environmentSummary.connectivityRangeFactor << ",\n";
     summary << "  \"pathLossExponent\": " << g_environmentSummary.pathLossExponent << ",\n";
+    summary << "  \"urbanAltitudePenaltyDbLow\": "
+            << g_environmentSummary.urbanAltitudePenaltyDbLow << ",\n";
+    summary << "  \"urbanAltitudeGainDbHigh\": "
+            << g_environmentSummary.urbanAltitudeGainDbHigh << ",\n";
+    summary << "  \"urbanStreetCanyonFactor\": "
+            << g_environmentSummary.urbanStreetCanyonFactor << ",\n";
+    summary << "  \"reroutePressureFactor\": "
+            << g_environmentSummary.reroutePressureFactor << ",\n";
+    summary << "  \"controlMessageUrgencyFactor\": "
+            << g_environmentSummary.controlMessageUrgencyFactor << ",\n";
+    summary << "  \"relayInstabilityFactor\": "
+            << g_environmentSummary.relayInstabilityFactor << ",\n";
+    summary << "  \"formationReconfigPenalty\": "
+            << g_environmentSummary.formationReconfigPenalty << ",\n";
+    summary << "  \"carrierFrequencyGHz\": "
+            << g_environmentSummary.carrierFrequencyGHz << ",\n";
+    summary << "  \"channelBandwidthMHz\": "
+            << g_environmentSummary.channelBandwidthMHz << ",\n";
+    summary << "  \"polarizationMode\": \""
+            << JsonEscape(g_environmentSummary.polarizationMode) << "\",\n";
+    summary << "  \"lakeVolatilityJitterDb\": "
+            << g_environmentSummary.lakeVolatilityJitterDb << ",\n";
+    summary << "  \"lakeDeepFadeProbability\": "
+            << g_environmentSummary.lakeDeepFadeProbability << ",\n";
+    summary << "  \"lakeDeepFadeMaxDb\": "
+            << g_environmentSummary.lakeDeepFadeMaxDb << ",\n";
+    summary << "  \"lakeReflectionDelayJitterMs\": "
+            << g_environmentSummary.lakeReflectionDelayJitterMs << ",\n";
     summary << "  \"rxSensitivity\": " << g_environmentSummary.rxSensitivity << ",\n";
     summary << "  \"txPower\": " << g_environmentSummary.txPower << ",\n";
     summary << "  \"noiseFigure\": " << g_environmentSummary.noiseFigure << ",\n";
@@ -734,6 +1040,11 @@ void FinalizeSimulationOutputs()
                                                   totalDelay / flowCount * 1000.0);
         }
     }
+    if (IsNonCooperativeAttackEnabled())
+    {
+        WriteNonCooperativeAttackPlanJson();
+        WriteNonCooperativePrePostComparisonJson();
+    }
 
     std::cout << "输出文件保存在: " << g_config.outputDir << std::endl;
     std::cout << "========================================" << std::endl;
@@ -775,6 +1086,22 @@ void FinalizeSimulationOutputs()
     if (g_keyNodeCandidatesLog.is_open())
     {
         g_keyNodeCandidatesLog.close();
+    }
+    if (g_nonCooperativeAttackRecommendationsLog.is_open())
+    {
+        g_nonCooperativeAttackRecommendationsLog.close();
+    }
+    if (g_nonCooperativeAttackEventsLog.is_open())
+    {
+        g_nonCooperativeAttackEventsLog.close();
+    }
+    if (g_nonCooperativeTargetBindingLog.is_open())
+    {
+        g_nonCooperativeTargetBindingLog.close();
+    }
+    if (g_nonCooperativeAttackEffectMetricsLog.is_open())
+    {
+        g_nonCooperativeAttackEffectMetricsLog.close();
     }
     if (g_cooperativeFailureEventsLog.is_open())
     {

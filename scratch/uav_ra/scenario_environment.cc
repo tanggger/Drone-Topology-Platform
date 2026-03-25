@@ -831,7 +831,12 @@ bool IsObservationPathOccluded(const Vector& observerPos, const Vector& targetPo
             }
         }
 
-        if (depth >= 15.0)
+        // Forest canopy should degrade observation quality, but not behave like
+        // a solid building for every moderate crossing. Use a much deeper path
+        // penetration threshold before declaring the path fully occluded.
+        const double hardOcclusionDepthM =
+            g_environmentConfig.sceneType == "forest" ? 55.0 : 35.0;
+        if (depth >= hardOcclusionDepthM)
         {
             return true;
         }
@@ -876,6 +881,12 @@ Vector ApplyRTKNoise(const Vector& originalPos, double time)
         }
     }
 
+    if ((g_environmentSummary.hasBuildings || g_environmentConfig.useBuildingGeometry) &&
+        noisyPos.z < 0.5)
+    {
+        noisyPos.z = 0.5;
+    }
+
     return noisyPos;
 }
 
@@ -918,7 +929,7 @@ bool LoadFormationTrajectory(const std::string& filename)
             point.nodeId = std::stoul(tokens[1]);
             point.x      = std::stod(tokens[2]);
             point.y      = std::stod(tokens[3]);
-            point.z      = std::stod(tokens[4]);
+            point.z      = std::max(0.5, std::stod(tokens[4]));
 
             g_trajectoryData.push_back(point);
             g_nodeTrajectories[point.nodeId].push_back(point);
@@ -1016,6 +1027,11 @@ void SetupFormationMobility(NodeContainer& nodes)
             for (const auto& point : trajectory) {
                 Vector originalPos(point.x, point.y, point.z);
                 Vector noisyPos = ApplyRTKNoise(originalPos, point.time);
+                if ((g_environmentSummary.hasBuildings || g_environmentConfig.useBuildingGeometry) &&
+                    noisyPos.z < 0.5)
+                {
+                    noisyPos.z = 0.5;
+                }
                 waypoint->AddWaypoint(Waypoint(Seconds(point.time), noisyPos));
             }
         } else {
@@ -1117,6 +1133,11 @@ void CreateInterferenceNodes(Ptr<YansWifiChannel> channel)
             curX = rng->GetValue(safeMinX, safeMaxX);
             curY = rng->GetValue(safeMinY, safeMaxY);
             curZ = rng->GetValue(baseZ - 10.0, baseZ + 10.0);
+            if ((g_environmentSummary.hasBuildings || g_environmentConfig.useBuildingGeometry) &&
+                curZ < 0.5)
+            {
+                curZ = 0.5;
+            }
             
             bool inside = false;
             for (BuildingList::Iterator bit = BuildingList::Begin(); bit != BuildingList::End(); ++bit) {
@@ -1163,6 +1184,11 @@ void CreateInterferenceNodes(Ptr<YansWifiChannel> channel)
                 if (candY < safeMinY) candY = safeMinY + 10;
                 if (candY > safeMaxY) candY = safeMaxY - 10;
                 candZ = std::max(baseZ - 15.0, std::min(baseZ + 30.0, candZ));
+                if ((g_environmentSummary.hasBuildings || g_environmentConfig.useBuildingGeometry) &&
+                    candZ < 0.5)
+                {
+                    candZ = 0.5;
+                }
 
                 // --- 关键修复：全路径碰撞检测 ---
                 // 不仅检查终点，还检查起点到终点的连线是否穿过任何建筑物
@@ -1215,7 +1241,7 @@ void CreateInterferenceNodes(Ptr<YansWifiChannel> channel)
                 // 原地不动或缓慢向上漂移以脱困
                bestX = curX; 
                bestY = curY; 
-               bestZ = curZ + 2.0; // 慢慢向上飘，总能飞出去
+               bestZ = std::max(0.5, curZ + 2.0); // 慢慢向上飘，总能飞出去
             }
 
             curX = bestX; curY = bestY; curZ = bestZ;

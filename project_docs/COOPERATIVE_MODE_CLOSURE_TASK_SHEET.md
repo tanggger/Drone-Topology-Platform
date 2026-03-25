@@ -187,6 +187,12 @@
   - 优先使用故障目标邻域的 `throughput`
   - 优先使用故障目标邻域的 `delay`
   - 若当前不存在有效故障邻域，则回退到全局平均业务指标
+- 故障目标邻域口径：
+  - 在故障激活时冻结一次故障邻域节点集合
+  - 故障窗口、恢复窗口、稳定窗口内持续复用同一份邻域集合
+  - 不再按故障后的实时拓扑重新计算邻域
+  - 这样可以避免目标节点失效后局部评估范围塌缩为 `0`
+  - 故障结束后清空冻结邻域
 - 判定规则：
   - 全局 `connectivity` 达标
   - 且业务三项中至少两项达标
@@ -530,7 +536,8 @@
 - 语义补充：
   - `activeNodeCount`、`leaderNodeId`、`isLeaderAlive` 为逐样本历史值
   - 不允许用最终运行时状态回填历史样本
-  - `failureNeighborhood*` 表示故障目标邻域业务指标
+  - `failureNeighborhood*` 表示冻结后的故障目标邻域业务指标
+  - 该邻域在故障激活时确定，并在整个故障 / 恢复评估窗口内保持不变
   - `failureTarget*` 表示故障目标节点业务指标
   - 前端展示故障冲击时，应优先使用 `failureNeighborhood*` 或 `failureTarget*`
   - `responseTimeSec`、`recoveryTimeSec`、`stabilizationTimeSec` 允许为 `null`
