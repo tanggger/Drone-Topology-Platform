@@ -437,6 +437,43 @@ double ComputeApproxStreetWidth(const std::vector<BuildingFootprint>& buildings)
     return gapSum / gapCount;
 }
 
+// Helper to avoid GCC ICE in complex loops by isolating logic
+static bool IsPointInAnyBuilding(const Vector& p)
+{
+    for (BuildingList::Iterator bit = BuildingList::Begin(); bit != BuildingList::End(); ++bit)
+    {
+        Box box = (*bit)->GetBoundaries();
+        if (p.x >= box.xMin - 2.0 && p.x <= box.xMax + 2.0 &&
+            p.y >= box.yMin - 2.0 && p.y <= box.yMax + 2.0 &&
+            p.z <= box.zMax + 2.0)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool IsSegmentBlocked(const Vector& p1, const Vector& p2)
+{
+    const double dx = p2.x - p1.x;
+    const double dy = p2.y - p1.y;
+    const double dz = p2.z - p1.z;
+    const double dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (dist < 1e-3) return false;
+
+    int steps = std::max(2, static_cast<int>(dist / 5.0));
+    for (int s = 1; s <= steps; ++s)
+    {
+        double alpha = static_cast<double>(s) / steps;
+        Vector check(p1.x + alpha * dx, p1.y + alpha * dy, p1.z + alpha * dz);
+        if (IsPointInAnyBuilding(check))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 uint32_t CountBuildingCrossingsForSegment(const Vector& src,
                                           const Vector& dst,
                                           const std::vector<BuildingFootprint>& buildings)
@@ -579,10 +616,12 @@ bool ParseGeoJsonFeatures(const std::string& jsonText,
         return false;
     }
 
-    for (size_t i = 0; i < featuresArray.size(); ++i)
+    size_t i = 0;
+    while (i < featuresArray.size())
     {
         if (featuresArray[i] != '{')
         {
+            ++i;
             continue;
         }
 
@@ -611,21 +650,13 @@ bool ParseGeoJsonFeatures(const std::string& jsonText,
         feature.surfaceType = ExtractJsonStringField(propertiesJson, "surface_type");
         feature.points = ExtractCoordinatePairs(coordinatesJson);
 
-        if (feature.featureType.empty())
+        if (!feature.featureType.empty() || (feature.heightM > 0.0 && feature.sceneType == "urban"))
         {
-            if (feature.heightM > 0.0 && feature.sceneType == "urban")
-            {
-                feature.featureType = "building";
-            }
-            else
-            {
-                i = closePos;
-                continue;
-            }
+            if (feature.featureType.empty()) feature.featureType = "building";
+            parsedFeatures.push_back(feature);
         }
 
-        parsedFeatures.push_back(feature);
-        i = closePos;
+        i = closePos + 1;
     }
 
     return !parsedFeatures.empty();
@@ -1044,6 +1075,8 @@ void SetupFormationMobility(NodeContainer& nodes)
     }
 }
 
+// Use noinline to keep function separate and avoid giant loop analysis blocks that trigger ICE
+__attribute__((noinline))
 bool LoadSceneGeometryFromMap(const std::string& mapFile)
 {
     if (mapFile.empty())
@@ -1166,23 +1199,21 @@ void CreateInterferenceNodes(Ptr<YansWifiChannel> channel)
         // --- 生成随机游走轨迹 ---
         (void)area; // 消除 unused variable 警告
         for (double t = waypointInterval; t <= g_config.duration; t += waypointInterval) {
-            int maxRetries = 15; // 增加重试次数
+            int retriesCount = 20;
             bool validMove = false;
-            
-            double bestX = curX, bestY = curY, bestZ = curZ;
-            
-            while (maxRetries-- > 0) {
-                // 随机生成
-                double candX = curX + rng->GetValue(-100.0, 100.0); // 增大游走步长
+            double nextX = curX, nextY = curY, nextZ = curZ;
+
+            while (retriesCount-- > 0) {
+                double candX = curX + rng->GetValue(-100.0, 100.0);
                 double candY = curY + rng->GetValue(-100.0, 100.0);
                 double candZ = curZ + rng->GetValue(-10.0, 10.0);
-                
+
                 // 边界回弹：must match the spawn bounds, otherwise nodes can drift outside
                 // the visible positive-quadrant scene even if they spawned inside it.
-                if (candX < safeMinX) candX = safeMinX + 10;
-                if (candX > safeMaxX) candX = safeMaxX - 10;
-                if (candY < safeMinY) candY = safeMinY + 10;
-                if (candY > safeMaxY) candY = safeMaxY - 10;
+                if (candX < safeMinX) candX = safeMinX + 5;
+                if (candX > safeMaxX) candX = safeMaxX - 5;
+                if (candY < safeMinY) candY = safeMinY + 5;
+                if (candY > safeMaxY) candY = safeMaxY - 5;
                 candZ = std::max(baseZ - 15.0, std::min(baseZ + 30.0, candZ));
                 if ((g_environmentSummary.hasBuildings || g_environmentConfig.useBuildingGeometry) &&
                     candZ < 0.5)
@@ -1190,38 +1221,7 @@ void CreateInterferenceNodes(Ptr<YansWifiChannel> channel)
                     candZ = 0.5;
                 }
 
-                // --- 关键修复：全路径碰撞检测 ---
-                // 不仅检查终点，还检查起点到终点的连线是否穿过任何建筑物
-                bool pathBlocked = false;
-                
-                Vector p1(curX, curY, curZ);
                 Vector p2(candX, candY, candZ);
-                double dist = std::sqrt(std::pow(p2.x - p1.x, 2) + std::pow(p2.y - p1.y, 2) + std::pow(p2.z - p1.z, 2));
-                int steps = std::max(2, (int)(dist / 5.0)); // 每5米检测一次
-                
-                for (int s = 1; s <= steps; ++s) { // s=0 是起点(已知安全), s=steps 是终点
-                    double alpha = (double)s / steps;
-                    double checkX = p1.x + alpha * (p2.x - p1.x);
-                    double checkY = p1.y + alpha * (p2.y - p1.y);
-                    double checkZ = p1.z + alpha * (p2.z - p1.z);
-                    
-                    for (BuildingList::Iterator bit = BuildingList::Begin(); bit != BuildingList::End(); ++bit) {
-                        Box box = (*bit)->GetBoundaries();
-                        // 包含安全边距
-                        if (checkX >= box.xMin - 2.0 && checkX <= box.xMax + 2.0 &&
-                            checkY >= box.yMin - 2.0 && checkY <= box.yMax + 2.0 &&
-                            checkZ <= box.zMax + 2.0) { // +2m 垂直余量
-                            pathBlocked = true;
-                            
-                            // 紧急避险策略：如果路径被挡，尝试大幅抬升终点高度以飞越
-                            // 只有当这是最后几次尝试时才启用，否则优先尝试换方向
-                            if (maxRetries < 3) {
-                                candZ = box.zMax + 8.0; 
-                                // 注意：只改终点高度不一定能保证中间点不撞(斜线)，
-                                // 但对于随机游走来说，下一轮迭代会重新计算路径检测
-                                // 这里我们标记这次尝试失败，让下一轮用新的 Z 重新检测
-                                // 或者更简单：直接在此处跳出并重试，但保留这个较高的Z作为启发？
-                                // 简单起见，这里只做标记，让外部重试去寻找不撞的路径
                             }
                             break; 
                         }
