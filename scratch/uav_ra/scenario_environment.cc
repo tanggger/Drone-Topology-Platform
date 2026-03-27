@@ -2,6 +2,7 @@
 
 #include <cctype>
 #include <regex>
+#pragma GCC optimize("no-tree-vrp")
 
 NS_LOG_COMPONENT_DEFINE("UAVResourceAllocationScenario");
 
