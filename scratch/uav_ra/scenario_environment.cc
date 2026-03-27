@@ -1126,8 +1126,6 @@ bool LoadSceneGeometryFromMap(const std::string& mapFile)
 }
 
 // ==================== 资源分配配置 ====================
-// struct ResourceAllocationConfig 已移动到稳健位置 (见顶部)
-
 
 void CreateInterferenceNodes(Ptr<YansWifiChannel> channel)
 {
@@ -1138,17 +1136,14 @@ void CreateInterferenceNodes(Ptr<YansWifiChannel> channel)
 
     g_interferenceNodes.Create(g_diffParams.numInterferenceNodes);
 
-    // ── 移动模型：WaypointMobilityModel 实现平滑随机漂移飞行 ──
     MobilityHelper mobility;
     mobility.SetMobilityModel("ns3::WaypointMobilityModel");
     mobility.Install(g_interferenceNodes);
 
     Ptr<UniformRandomVariable> rng = CreateObject<UniformRandomVariable>();
-    double margin           = 20.0;               // 边界安全距离 (m)
-    double area             = g_config.areaSize;
-    double baseZ            = g_config.uavHeight; // 与无人机集群初始高度一致
-    double waypointInterval = 15.0;               // 每15秒生成一个随机航路点
-    // Use one consistent movement box for both spawn and later wandering.
+    double margin           = 20.0;
+    double baseZ            = g_config.uavHeight;
+    double waypointInterval = 15.0;
     const double safeMinX = std::max(0.0, g_config.minX + margin);
     const double safeMinY = std::max(0.0, g_config.minY + margin);
     const double safeMaxX = std::max(safeMinX + 1.0, g_config.maxX - margin);
@@ -1158,46 +1153,23 @@ void CreateInterferenceNodes(Ptr<YansWifiChannel> channel)
         Ptr<WaypointMobilityModel> wpm =
             g_interferenceNodes.Get(i)->GetObject<WaypointMobilityModel>();
         
-        // --- 修复初始位置 ---
-        double curX, curY, curZ;
+        double curX = 0, curY = 0, curZ = baseZ;
         int initRetries = 20;
-        
         while (initRetries-- > 0) {
             curX = rng->GetValue(safeMinX, safeMaxX);
             curY = rng->GetValue(safeMinY, safeMaxY);
             curZ = rng->GetValue(baseZ - 10.0, baseZ + 10.0);
-            if ((g_environmentSummary.hasBuildings || g_environmentConfig.useBuildingGeometry) &&
-                curZ < 0.5)
-            {
-                curZ = 0.5;
-            }
+            if (curZ < 0.5) curZ = 0.5;
             
-            bool inside = false;
-            for (BuildingList::Iterator bit = BuildingList::Begin(); bit != BuildingList::End(); ++bit) {
-                Box box = (*bit)->GetBoundaries();
-                // 扩宽检测边界
-                if (curX >= box.xMin - 2 && curX <= box.xMax + 2 &&
-                    curY >= box.yMin - 2 && curY <= box.yMax + 2 &&
-                    curZ <= box.zMax + 2) {
-                    inside = true;
-                    // 若就在楼里，尝试抬升到楼顶
-                    if (initRetries < 5) { 
-                        curZ = box.zMax + 10.0; // 直接放到楼顶上
-                        inside = false; // 接受这个位置
-                    }
-                    break;
-                }
-            }
-            if (!inside) {
+            if (!IsPointInAnyBuilding(Vector(curX, curY, curZ))) break;
+            if (initRetries < 5) { 
+                curZ += 30.0; // Fail-safe: lift up
                 break;
             }
         }
-        // 如果实在找不到，就用默认高度但可能碰运气
         
         wpm->AddWaypoint(Waypoint(Seconds(0.0), Vector(curX, curY, curZ)));
 
-        // --- 生成随机游走轨迹 ---
-        (void)area; // 消除 unused variable 警告
         for (double t = waypointInterval; t <= g_config.duration; t += waypointInterval) {
             int retriesCount = 20;
             bool validMove = false;
@@ -1208,48 +1180,29 @@ void CreateInterferenceNodes(Ptr<YansWifiChannel> channel)
                 double candY = curY + rng->GetValue(-100.0, 100.0);
                 double candZ = curZ + rng->GetValue(-10.0, 10.0);
 
-                // 边界回弹：must match the spawn bounds, otherwise nodes can drift outside
-                // the visible positive-quadrant scene even if they spawned inside it.
                 if (candX < safeMinX) candX = safeMinX + 5;
                 if (candX > safeMaxX) candX = safeMaxX - 5;
                 if (candY < safeMinY) candY = safeMinY + 5;
                 if (candY > safeMaxY) candY = safeMaxY - 5;
                 candZ = std::max(baseZ - 15.0, std::min(baseZ + 30.0, candZ));
-                if ((g_environmentSummary.hasBuildings || g_environmentConfig.useBuildingGeometry) &&
-                    candZ < 0.5)
-                {
-                    candZ = 0.5;
-                }
 
-                Vector p2(candX, candY, candZ);
-                            }
-                            break; 
-                        }
-                    }
-                    if (pathBlocked) break;
-                }
-                
-                if (!pathBlocked) {
-                    bestX = candX; bestY = candY; bestZ = candZ;
+                if (!IsSegmentBlocked(Vector(curX, curY, curZ), Vector(candX, candY, candZ))) {
+                    nextX = candX; nextY = candY; nextZ = candZ;
                     validMove = true;
                     break;
                 }
             }
-            
-            // 如果尝试多次都无法移动（被困住），则原地垂直爬升/悬停
+
             if (!validMove) {
-                // 原地不动或缓慢向上漂移以脱困
-               bestX = curX; 
-               bestY = curY; 
-               bestZ = std::max(0.5, curZ + 2.0); // 慢慢向上飘，总能飞出去
+                nextZ = curZ + 2.0;
             }
 
-            curX = bestX; curY = bestY; curZ = bestZ;
+            curX = nextX; curY = nextY; curZ = nextZ;
             wpm->AddWaypoint(Waypoint(Seconds(t), Vector(curX, curY, curZ)));
         }
     }
 
-    WifiHelper wifi; // 干扰节点使用相同标准发包
+    WifiHelper wifi;
     wifi.SetStandard(WIFI_STANDARD_80211a);
     wifi.SetRemoteStationManager("ns3::ConstantRateWifiManager",
                                  "DataMode", StringValue("OfdmRate6Mbps"),
@@ -1257,7 +1210,7 @@ void CreateInterferenceNodes(Ptr<YansWifiChannel> channel)
     
     YansWifiPhyHelper phy;
     phy.SetChannel(channel);
-    phy.Set("TxPowerStart", DoubleValue(30.0)); // 干扰节点发射功率更强，模拟恶意压制
+    phy.Set("TxPowerStart", DoubleValue(30.0));
     phy.Set("TxPowerEnd", DoubleValue(30.0));
     
     WifiMacHelper mac;
@@ -1267,8 +1220,6 @@ void CreateInterferenceNodes(Ptr<YansWifiChannel> channel)
     InternetStackHelper stack;
     stack.Install(g_interferenceNodes);
     
-    // 使用传入的 ipv4 统一分配，避免子网冲突
-    // Ipv4InterfaceContainer interferenceInterfaces = ipv4.Assign(interferenceDevices);
     Ipv4AddressHelper interferenceIpv4;
     interferenceIpv4.SetBase("10.2.1.0", "255.255.255.0");
     Ipv4InterfaceContainer interferenceInterfaces = interferenceIpv4.Assign(interferenceDevices);
@@ -1279,15 +1230,10 @@ void CreateInterferenceNodes(Ptr<YansWifiChannel> channel)
         double onTime   = std::max(0.01, std::min(0.99, g_diffParams.interferenceDutyCycle));
         double offTime  = 1.0 - onTime;
         
-        // 速率字符串
-        std::string dataRate;
-        if (rateMbps >= 1.0) {
-            dataRate = std::to_string((int)rateMbps) + "Mbps";
-        } else {
-            dataRate = std::to_string((int)(rateMbps * 1000)) + "kbps";
-        }
+        std::string dataRate = (rateMbps >= 1.0) ? 
+            std::to_string((int)rateMbps) + "Mbps" : 
+            std::to_string((int)(rateMbps * 1000)) + "kbps";
         
-        // 包大小随速率适配
         uint32_t pktSize = 512;
         if (rateMbps >= 4.0) pktSize = 1300;
         if (rateMbps >= 6.0) pktSize = 1472;
