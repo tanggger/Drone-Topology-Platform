@@ -29,7 +29,7 @@ from typing import Dict, List, Tuple
 import matplotlib.font_manager as fm
 # 尝试找到系统中可用的中文字体，按优先级排序
 available_fonts = set(f.name for f in fm.fontManager.ttflist)
-font_candidates = ['SimHei', 'Microsoft YaHei', 'SimSun', 'WenQuanYi Micro Hei', 'WenQuanYi Zen Hei', 'DejaVu Sans', 'Liberation Sans', 'Arial Unicode MS']
+font_candidates = ['SimHei', 'Microsoft YaHei', 'SimSun', 'Noto Sans CJK SC', 'WenQuanYi Micro Hei', 'WenQuanYi Zen Hei', 'DejaVu Sans', 'Liberation Sans', 'Arial Unicode MS']
 selected_font = next((Font for Font in font_candidates if Font in available_fonts), 'sans-serif')
 plt.rcParams['font.sans-serif'] = [selected_font]
 plt.rcParams['axes.unicode_minus'] = False
@@ -39,6 +39,8 @@ logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
 # 屏蔽 Glyph missing 警告
 import warnings
 warnings.filterwarnings("ignore", module="matplotlib")
+warnings.filterwarnings("ignore", category=UserWarning, message=".*Glyph.*")
+warnings.filterwarnings("ignore", category=UserWarning, message=".*missing from current font.*")
 
 sns.set_style("whitegrid")
 

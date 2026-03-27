@@ -493,6 +493,20 @@ void WriteNonCooperativeAttackPlanJson()
     out << "  \"attackType\": \"" << JsonEscape(plan.attackType) << "\",\n";
     out << "  \"recommendedObservedNodeId\": " << plan.recommendedObservedNodeId << ",\n";
     out << "  \"confirmedObservedNodeId\": " << plan.confirmedObservedNodeId << ",\n";
+    out << "  \"recommendedScore\": " << plan.recommendedScore << ",\n";
+    out << "  \"recommendationReason\": \"" << JsonEscape(plan.recommendationReason) << "\",\n";
+    out << "  \"inferenceMethod\": \"" << JsonEscape(plan.inferenceMethod) << "\",\n";
+    out << "  \"structureScore\": " << plan.structureScore << ",\n";
+    out << "  \"evidenceSupportScore\": " << plan.evidenceSupportScore << ",\n";
+    out << "  \"causalSupportScore\": " << plan.causalSupportScore << ",\n";
+    out << "  \"directionalInfluenceScore\": " << plan.directionalInfluenceScore << ",\n";
+    out << "  \"temporalStabilityScore\": " << plan.temporalStabilityScore << ",\n";
+    out << "  \"localBridgeScore\": " << plan.localBridgeScore << ",\n";
+    out << "  \"postRemovalDamageScore\": " << plan.postRemovalDamageScore << ",\n";
+    out << "  \"twoHopReachabilityScore\": " << plan.twoHopReachabilityScore << ",\n";
+    out << "  \"interClusterBridgeScore\": " << plan.interClusterBridgeScore << ",\n";
+    out << "  \"localCutRiskScore\": " << plan.localCutRiskScore << ",\n";
+    out << "  \"neighborRedundancyPenalty\": " << plan.neighborRedundancyPenalty << ",\n";
     out << "  \"userTriggeredExecution\": " << BoolToJson(plan.userTriggeredExecution) << ",\n";
     out << "  \"attackExecuteTime\": " << plan.attackExecuteTime << ",\n";
     out << "  \"targetBindingStatus\": \"" << JsonEscape(plan.targetBindingStatus) << "\",\n";
@@ -711,15 +725,26 @@ void InitializeOutputFiles()
             << "windowStart,windowEnd,srcObservedNodeId,dstObservedNodeId,"
                "evidenceStrength,commCount,commDurationTotal,avgRxPowerDbm,channelId,"
                "centerFrequencyHz,observerCount,observerAgreementScore,"
-               "edgeObservationConfidence,isMissing,missingReason,noiseLevel,sceneType,"
-               "operationMode\n";
+               "edgeObservationConfidence,laggedPredictiveScoreForward,"
+               "laggedPredictiveScoreBackward,directedResponseScoreForward,"
+               "directedResponseScoreBackward,excitationScoreForward,"
+               "excitationScoreBackward,laggedPredictiveScore,directedResponseScore,"
+               "excitationScore,directionalityScore,dominantDirection,isMissing,missingReason,"
+               "noiseLevel,sceneType,operationMode\n";
     }
 
     if (g_inferredTopologyEdgesLog.is_open())
     {
         g_inferredTopologyEdgesLog
             << "windowStart,windowEnd,srcObservedNodeId,dstObservedNodeId,edgeProbability,"
-               "edgeConfidence,inferenceMethod,sceneType,operationMode\n";
+               "edgeConfidence,laggedPredictiveScoreForward,laggedPredictiveScoreBackward,"
+               "directedResponseScoreForward,directedResponseScoreBackward,"
+               "excitationScoreForward,excitationScoreBackward,laggedPredictiveScore,"
+               "directedResponseScore,excitationScore,directionalityScore,"
+               "dominantDirection,temporalContinuityScore,posteriorEdgeProbability,"
+               "edgeDynamicState,stabilityAge,weakeningAge,edgeStage,"
+               "falseLinkSuppressionReason,suppressionMediatorObservedNodeId,"
+               "inferenceMethod,sceneType,operationMode\n";
     }
 
     if (g_inferredGraphNodesLog.is_open())
@@ -741,6 +766,10 @@ void InitializeOutputFiles()
         g_nonCooperativeAttackRecommendationsLog
             << "windowStart,windowEnd,recommendedObservedNodeId,recommendedScore,"
                "recommendationRank,recommendationReason,inferenceMethod,"
+               "structureScore,evidenceSupportScore,causalSupportScore,"
+               "directionalInfluenceScore,temporalStabilityScore,localBridgeScore,"
+               "postRemovalDamageScore,twoHopReachabilityScore,"
+               "interClusterBridgeScore,localCutRiskScore,neighborRedundancyPenalty,"
                "weightedDegreeCentrality,weightedBetweennessCentrality,"
                "weightedClosenessCentrality,weightedPageRank,weightedKShell\n";
     }

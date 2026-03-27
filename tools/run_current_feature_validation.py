@@ -1110,6 +1110,17 @@ def summarize_noncooperative_attack_run(spec: RunSpec, run_dir: Path, error: Opt
             "recommendedObservedNodeId",
             "recommendedScore",
             "recommendationRank",
+            "structureScore",
+            "evidenceSupportScore",
+            "causalSupportScore",
+            "directionalInfluenceScore",
+            "temporalStabilityScore",
+            "localBridgeScore",
+            "postRemovalDamageScore",
+            "twoHopReachabilityScore",
+            "interClusterBridgeScore",
+            "localCutRiskScore",
+            "neighborRedundancyPenalty",
         ],
     )
     if recommendations.empty:
@@ -1121,6 +1132,17 @@ def summarize_noncooperative_attack_run(spec: RunSpec, run_dir: Path, error: Opt
                 "recommendedObservedNodeId",
                 "recommendedScore",
                 "recommendationRank",
+                "structureScore",
+                "evidenceSupportScore",
+                "causalSupportScore",
+                "directionalInfluenceScore",
+                "temporalStabilityScore",
+                "localBridgeScore",
+                "postRemovalDamageScore",
+                "twoHopReachabilityScore",
+                "interClusterBridgeScore",
+                "localCutRiskScore",
+                "neighborRedundancyPenalty",
             ],
         )
     bindings = coerce_numeric(
@@ -1253,6 +1275,18 @@ def summarize_noncooperative_attack_run(spec: RunSpec, run_dir: Path, error: Opt
         "target_binding_status": attack_plan.get("targetBindingStatus"),
         "attack_executed": recovery_summary.get("attackExecuted"),
         "attack_execute_time": attack_plan.get("strikeExecuteTime"),
+        "recommendation_score": attack_plan.get("recommendedScore"),
+        "structure_score": attack_plan.get("structureScore"),
+        "evidence_support_score": attack_plan.get("evidenceSupportScore"),
+        "causal_support_score": attack_plan.get("causalSupportScore"),
+        "directional_influence_score": attack_plan.get("directionalInfluenceScore"),
+        "temporal_stability_score": attack_plan.get("temporalStabilityScore"),
+        "local_bridge_score": attack_plan.get("localBridgeScore"),
+        "post_removal_damage_score": attack_plan.get("postRemovalDamageScore"),
+        "two_hop_reachability_score": attack_plan.get("twoHopReachabilityScore"),
+        "inter_cluster_bridge_score": attack_plan.get("interClusterBridgeScore"),
+        "local_cut_risk_score": attack_plan.get("localCutRiskScore"),
+        "neighbor_redundancy_penalty": attack_plan.get("neighborRedundancyPenalty"),
         "recovery_completed_at": recovery_summary.get("recoveryCompletedAt"),
         "target_neighborhood_size": recovery_summary.get("targetNeighborhoodSize"),
         "pre_attack_global_connectivity": pre_global_connectivity,
@@ -2070,6 +2104,51 @@ def plot_noncooperative_attack_summary(attack_df: pd.DataFrame, plots_dir: Path)
     return [output.name]
 
 
+def plot_noncooperative_algorithm_effects(attack_df: pd.DataFrame, plots_dir: Path) -> List[str]:
+    if attack_df.empty:
+        return []
+
+    ordered = attack_df.copy()
+    ordered["scene_type"] = pd.Categorical(ordered["scene_type"], SCENES, ordered=True)
+    ordered = ordered.sort_values("scene_type")
+
+    metrics = [
+        ("recommendation_score", "Top Recommendation Score"),
+        ("structure_score", "Structure Score"),
+        ("evidence_support_score", "Evidence Support"),
+        ("causal_support_score", "Causal Support"),
+        ("directional_influence_score", "Directional Influence"),
+        ("temporal_stability_score", "Temporal Stability"),
+        ("local_bridge_score", "Local Bridge"),
+        ("post_removal_damage_score", "Post-removal Damage"),
+        ("two_hop_reachability_score", "Two-hop Reachability"),
+        ("inter_cluster_bridge_score", "Inter-cluster Bridge"),
+        ("local_cut_risk_score", "Local Cut Risk"),
+        ("neighbor_redundancy_penalty", "Neighbor Redundancy Penalty"),
+    ]
+    fig, axes = plt.subplots(len(metrics), 1, figsize=(12, 31), sharex=True)
+    x = np.arange(len(ordered))
+    labels = ordered["scene_type"].astype(str).tolist()
+    colors = ordered["validation_state"].map(
+        {"PASS": "#2ecc71", "WARN": "#f1c40f", "FAIL": "#e74c3c"}
+    )
+
+    for ax, (col, title) in zip(axes, metrics):
+        values = pd.to_numeric(ordered[col], errors="coerce")
+        ax.bar(x, values, color=colors)
+        ax.set_title(title)
+        ax.set_ylim(0, max(1.0, float(np.nanmax(values)) if not values.isna().all() else 1.0))
+        ax.grid(True, axis="y", alpha=0.25)
+
+    axes[-1].set_xticks(x)
+    axes[-1].set_xticklabels(labels)
+    plt.tight_layout()
+    output = plots_dir / "noncooperative_algorithm_effects.png"
+    plt.savefig(output, dpi=180, bbox_inches="tight")
+    plt.close(fig)
+    return [output.name]
+
+
 def plot_noncooperative_attack_timelines(attack_df: pd.DataFrame, plots_dir: Path) -> List[str]:
     generated: List[str] = []
     for row in attack_df.to_dict("records"):
@@ -2092,7 +2171,23 @@ def plot_noncooperative_attack_timelines(attack_df: pd.DataFrame, plots_dir: Pat
         )
         recommendations = coerce_numeric(
             ensure_csv(run_dir / "noncooperative_attack_recommendations.csv"),
-            ["windowStart", "recommendedObservedNodeId", "recommendedScore"],
+            [
+                "windowStart",
+                "recommendedObservedNodeId",
+                "recommendedScore",
+                "recommendationRank",
+                "structureScore",
+                "evidenceSupportScore",
+                "causalSupportScore",
+                "directionalInfluenceScore",
+                "temporalStabilityScore",
+                "localBridgeScore",
+                "postRemovalDamageScore",
+                "twoHopReachabilityScore",
+                "interClusterBridgeScore",
+                "localCutRiskScore",
+                "neighborRedundancyPenalty",
+            ],
         )
         if effect_metrics.empty:
             continue
@@ -2102,7 +2197,7 @@ def plot_noncooperative_attack_timelines(attack_df: pd.DataFrame, plots_dir: Pat
         if global_df.empty:
             continue
 
-        fig, axes = plt.subplots(4, 1, figsize=(14, 16), sharex=True)
+        fig, axes = plt.subplots(5, 1, figsize=(14, 19), sharex=True)
         fig.suptitle(row["run_name"], fontsize=13, fontweight="bold")
 
         axes[0].plot(global_df["time"], global_df["connectivityRatio"], color="#2980b9", label="Global Connectivity")
@@ -2132,11 +2227,6 @@ def plot_noncooperative_attack_timelines(attack_df: pd.DataFrame, plots_dir: Pat
         axes[3].plot(global_df["time"], global_df["recoveryProgress"], color="#16a085", label="Global Recovery Progress")
         if not local_df.empty:
             axes[3].plot(local_df["time"], local_df["recoveryProgress"], color="#2c3e50", linestyle="--", label="Neighborhood Recovery Progress")
-        if not recommendations.empty:
-            rec_group = recommendations.groupby("windowStart")["recommendedScore"].max().reset_index()
-            ax3b = axes[3].twinx()
-            ax3b.plot(rec_group["windowStart"], rec_group["recommendedScore"], color="#7f8c8d", linestyle=":", label="Top Recommendation Score")
-            ax3b.set_ylabel("Rec Score")
         phase_y = pd.Categorical(global_df["phase"], ["pre_attack", "immediate_post_attack", "recovery", "final"], ordered=True).codes
         ax3c = axes[3].twinx()
         plot_state_series(
@@ -2158,10 +2248,44 @@ def plot_noncooperative_attack_timelines(attack_df: pd.DataFrame, plots_dir: Pat
                     for ax in axes:
                         ax.axvline(float(event["eventTime"]), color="#c0392b", linestyle="--", alpha=0.6)
         axes[3].set_ylabel("Recovery Progress")
-        axes[3].set_xlabel("Time (s)")
         axes[3].grid(True, alpha=0.25)
         axes[3].legend(loc="upper right")
         annotate_attack_phases(axes[3], global_df)
+
+        if not recommendations.empty:
+            ranked = recommendations.copy()
+            if "recommendationRank" in ranked.columns:
+                top_rank = ranked.loc[ranked["recommendationRank"] == 1].copy()
+                if not top_rank.empty:
+                    ranked = top_rank
+            ranked = ranked.sort_values("windowStart")
+
+            axes[4].plot(ranked["windowStart"], ranked["recommendedScore"], color="#111827", label="Top Recommendation")
+            if "structureScore" in ranked.columns:
+                axes[4].plot(ranked["windowStart"], ranked["structureScore"], color="#2980b9", linestyle="--", label="Structure")
+            if "causalSupportScore" in ranked.columns:
+                axes[4].plot(ranked["windowStart"], ranked["causalSupportScore"], color="#c0392b", linestyle=":", label="Causality")
+            if "directionalInfluenceScore" in ranked.columns:
+                axes[4].plot(ranked["windowStart"], ranked["directionalInfluenceScore"], color="#e67e22", linestyle="-", label="Directional")
+            if "temporalStabilityScore" in ranked.columns:
+                axes[4].plot(ranked["windowStart"], ranked["temporalStabilityScore"], color="#16a085", linestyle="-.", label="Temporal")
+            if "localBridgeScore" in ranked.columns:
+                axes[4].plot(ranked["windowStart"], ranked["localBridgeScore"], color="#8e44ad", linestyle="--", label="Bridge")
+            if "postRemovalDamageScore" in ranked.columns:
+                axes[4].plot(ranked["windowStart"], ranked["postRemovalDamageScore"], color="#d35400", linestyle=":", label="Post-removal Damage")
+            if "twoHopReachabilityScore" in ranked.columns:
+                axes[4].plot(ranked["windowStart"], ranked["twoHopReachabilityScore"], color="#2c3e50", linestyle="-", label="Two-hop")
+            if "interClusterBridgeScore" in ranked.columns:
+                axes[4].plot(ranked["windowStart"], ranked["interClusterBridgeScore"], color="#7f8c8d", linestyle="--", label="Inter-cluster")
+            if "localCutRiskScore" in ranked.columns:
+                axes[4].plot(ranked["windowStart"], ranked["localCutRiskScore"], color="#27ae60", linestyle=":", label="Cut Risk")
+            if "neighborRedundancyPenalty" in ranked.columns:
+                axes[4].plot(ranked["windowStart"], ranked["neighborRedundancyPenalty"], color="#95a5a6", linestyle="-.", label="Redundancy Penalty")
+        axes[4].set_ylabel("Rec Score")
+        axes[4].set_xlabel("Time (s)")
+        axes[4].grid(True, alpha=0.25)
+        axes[4].legend(loc="upper right")
+        annotate_attack_phases(axes[4], global_df)
 
         plt.tight_layout()
         name = f"{slugify(row['run_name'])}_attack_timeline.png"
@@ -2415,6 +2539,7 @@ def main() -> int:
     generated_plots.extend(plot_noncooperative_summary(non_df, plots_dir))
     generated_plots.extend(plot_noncooperative_timelines(non_df, plots_dir))
     generated_plots.extend(plot_noncooperative_attack_summary(attack_df, plots_dir))
+    generated_plots.extend(plot_noncooperative_algorithm_effects(attack_df, plots_dir))
     generated_plots.extend(plot_noncooperative_attack_timelines(attack_df, plots_dir))
 
     persist_summaries(output_root, all_df, coop_df, non_df, attack_df)

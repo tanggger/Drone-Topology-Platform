@@ -27,6 +27,7 @@
   - 恢复动作时间线
   - 恢复指标时间序列
   - 仪表盘快照
+  - 路由/中继/控制时效压力指标
 - 非合作模式当前完成到
   - 观测事件
   - 窗口化观测
@@ -41,6 +42,11 @@
   - 目标绑定
   - 打击事件
   - 打击前后效果评估
+  - 第二版算法增强字段
+    - 有方向因果边
+    - 动态边状态
+    - 条件伪边抑制
+    - 更强的局部子图关键节点特征
 
 因此前端当前应分两条线推进：
 
@@ -488,6 +494,8 @@ GET /api/results/<task_id>
 - `environmentSource`
 - `geometryInputMode`
 - `effectiveModelSummary`
+- `avgBuildingHeightM`
+- `avgStreetWidthM`
 - `hasBuildings`
 - `hasVegetation`
 - `hasWaterSurface`
@@ -495,6 +503,20 @@ GET /api/results/<task_id>
 - `interferenceFactor`
 - `connectivityRangeFactor`
 - `pathLossExponent`
+- `carrierFrequencyGHz`
+- `channelBandwidthMHz`
+- `polarizationMode`
+- `urbanAltitudePenaltyDbLow`
+- `urbanAltitudeGainDbHigh`
+- `urbanStreetCanyonFactor`
+- `lakeVolatilityJitterDb`
+- `lakeDeepFadeProbability`
+- `lakeDeepFadeMaxDb`
+- `lakeReflectionDelayJitterMs`
+- `reroutePressureFactor`
+- `controlMessageUrgencyFactor`
+- `relayInstabilityFactor`
+- `formationReconfigPenalty`
 - 合作模式下还会包含：
   - `communicationMode`
   - `leaderNodeId`
@@ -801,6 +823,10 @@ data.meta.operationMode === "cooperative"
 - `activeNodeCount`
 - `leaderNodeId`
 - `isLeaderAlive`
+- `routeChangeCount`
+- `relaySwitchCount`
+- `controlDeadlineMissCount`
+- `routePressureScore`
 - `responseTimeSec`
 - `recoveryTimeSec`
 - `stabilizationTimeSec`
@@ -819,6 +845,14 @@ data.meta.operationMode === "cooperative"
   - 故障激活时确定
   - 故障 / 恢复 / 稳定阶段复用同一份邻域
   - 不随故障后的实时拓扑重新计算
+- `routeChangeCount`
+  - 当前样本下累计的路由切换次数
+- `relaySwitchCount`
+  - 当前样本下累计的中继切换次数
+- `controlDeadlineMissCount`
+  - 当前样本下控制消息截止时间违约次数
+- `routePressureScore`
+  - 场景真实性增强后对网络层重构压力的综合评分
 
 恢复判定口径：
 
@@ -853,6 +887,7 @@ data.meta.operationMode === "cooperative"
 - 连通率恢复曲线
 - PDR / 吞吐 / 时延 / P99 时延图
 - 响应时间 / 恢复时间 / 稳定时间展示
+- 路由压力 / 中继切换 / 控制时效告警图
 
 ### 8.7 CSV 明细
 
@@ -937,6 +972,27 @@ data.meta.operationMode === "non_cooperative"
 - 边证据面板
 - 推断前证据层
 
+关键字段补充：
+
+- `laggedPredictiveScoreForward`
+- `laggedPredictiveScoreBackward`
+- `directedResponseScoreForward`
+- `directedResponseScoreBackward`
+- `excitationScoreForward`
+- `excitationScoreBackward`
+- `directionalityScore`
+- `dominantDirection`
+
+说明：
+
+- `Forward` 表示 `srcObservedNodeId -> dstObservedNodeId`
+- `Backward` 表示 `dstObservedNodeId -> srcObservedNodeId`
+- `dominantDirection` 当前值域：
+  - `src_to_dst`
+  - `dst_to_src`
+  - `bidirectional`
+  - `undetermined`
+
 ### 9.6 `non_cooperative.observation_inference.inferred_topology_edges`
 
 文件来源：
@@ -947,6 +1003,48 @@ data.meta.operationMode === "non_cooperative"
 
 - 中间沙盘推断概率边
 - 右侧推断结果列表
+
+关键字段补充：
+
+- `laggedPredictiveScoreForward`
+- `laggedPredictiveScoreBackward`
+- `directedResponseScoreForward`
+- `directedResponseScoreBackward`
+- `excitationScoreForward`
+- `excitationScoreBackward`
+- `directionalityScore`
+- `dominantDirection`
+- `posteriorEdgeProbability`
+- `edgeDynamicState`
+- `stabilityAge`
+- `weakeningAge`
+- `edgeStage`
+- `falseLinkSuppressionReason`
+- `suppressionMediatorObservedNodeId`
+
+说明：
+
+- `posteriorEdgeProbability`
+  - 动态边状态跟踪后的后验边概率
+- `edgeDynamicState` 当前值域：
+  - `emerging`
+  - `stable`
+  - `weakening`
+  - `vanished`
+- `edgeStage` 当前值域：
+  - `candidate`
+  - `final`
+  - `filtered_out`
+- `falseLinkSuppressionReason` 目前可能包括：
+  - `low_edge_confidence`
+  - `low_causality`
+  - `low_continuity`
+  - `weak_observer_agreement`
+  - `vanished_edge_state`
+  - `shared_cause_suspected`
+  - `indirect_path_explained`
+- `suppressionMediatorObservedNodeId`
+  - 当伪边被解释为经由第三节点产生时，记录该中介节点 ID
 
 ### 9.7 `non_cooperative.observation_inference.inferred_graph_nodes`
 
@@ -991,6 +1089,32 @@ data.meta.operationMode === "non_cooperative"
 - `recommendationRank`
 - `recommendationReason`
 - `inferenceMethod`
+- `structureScore`
+- `evidenceSupportScore`
+- `causalSupportScore`
+- `directionalInfluenceScore`
+- `temporalStabilityScore`
+- `localBridgeScore`
+- `postRemovalDamageScore`
+- `twoHopReachabilityScore`
+- `interClusterBridgeScore`
+- `localCutRiskScore`
+- `neighborRedundancyPenalty`
+
+说明：
+
+- 当前推荐器已从第一版 `multi_metric_graph_bridge_fusion_v3`
+ 进一步升级到第二版 `directed_dynamic_graph_bridge_fusion_v4`
+- `directionalInfluenceScore`
+  - 节点作为方向性上游驱动节点的强度
+- `twoHopReachabilityScore`
+  - 节点在 2-hop 局部范围内的可达影响范围
+- `interClusterBridgeScore`
+  - 节点是否连接多个低连通局部簇
+- `localCutRiskScore`
+  - 删除节点后局部 2-hop 子图断裂风险
+- `neighborRedundancyPenalty`
+  - 邻域本身高度冗余时对节点重要性的降权项
 
 ### 9.10 `non_cooperative.attack.plan`
 
@@ -1016,6 +1140,25 @@ data.meta.operationMode === "non_cooperative"
 - `targetNeighborhoodSize`
 - `evaluationWindowStart`
 - `evaluationWindowEnd`
+- `recommendedScore`
+- `recommendationReason`
+- `inferenceMethod`
+- `structureScore`
+- `evidenceSupportScore`
+- `causalSupportScore`
+- `directionalInfluenceScore`
+- `temporalStabilityScore`
+- `localBridgeScore`
+- `postRemovalDamageScore`
+- `twoHopReachabilityScore`
+- `interClusterBridgeScore`
+- `localCutRiskScore`
+- `neighborRedundancyPenalty`
+
+说明：
+
+- `plan` 不只是执行计划，也承载了“为什么推荐打这个目标”的分解解释
+- 前端可以直接把这些字段映射到“推荐理由卡片”或“推荐分解雷达图/条形图”
 
 ### 9.11 `non_cooperative.attack.events`
 

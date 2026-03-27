@@ -55,6 +55,11 @@ double Clamp01Local(double value)
     return std::max(0.0, std::min(1.0, value));
 }
 
+double AverageDirectionalCausalSupport(double lagged, double response, double excitation)
+{
+    return Clamp01Local((lagged + response + excitation) / 3.0);
+}
+
 double EstimateEnemyLinkRxPowerDbm(uint32_t srcId, uint32_t dstId)
 {
     if (srcId >= g_interferenceNodes.GetN() || dstId >= g_interferenceNodes.GetN())
@@ -828,6 +833,451 @@ std::vector<double> ComputeKShell(
     return shellIndex;
 }
 
+std::vector<double> ComputeLocalBridgeScores(
+    const std::vector<std::vector<std::pair<size_t, double>>>& adjacency)
+{
+    const size_t n = adjacency.size();
+    std::vector<std::vector<bool>> connected(n, std::vector<bool>(n, false));
+    for (size_t i = 0; i < n; ++i)
+    {
+        for (const auto& [neighbor, weight] : adjacency[i])
+        {
+            (void)weight;
+            connected[i][neighbor] = true;
+        }
+    }
+
+    std::vector<double> scores(n, 0.0);
+    for (size_t node = 0; node < n; ++node)
+    {
+        std::vector<size_t> neighbors;
+        for (const auto& [neighbor, weight] : adjacency[node])
+        {
+            (void)weight;
+            neighbors.push_back(neighbor);
+        }
+
+        if (neighbors.size() < 2)
+        {
+            scores[node] = 0.0;
+            continue;
+        }
+
+        uint32_t existingLinks = 0;
+        const uint32_t possibleLinks =
+            static_cast<uint32_t>(neighbors.size() * (neighbors.size() - 1) / 2);
+        for (size_t i = 0; i < neighbors.size(); ++i)
+        {
+            for (size_t j = i + 1; j < neighbors.size(); ++j)
+            {
+                if (connected[neighbors[i]][neighbors[j]] ||
+                    connected[neighbors[j]][neighbors[i]])
+                {
+                    existingLinks++;
+                }
+            }
+        }
+
+        const double density =
+            possibleLinks > 0 ? static_cast<double>(existingLinks) / possibleLinks : 1.0;
+        scores[node] = Clamp01Local(1.0 - density);
+    }
+    return scores;
+}
+
+std::vector<double> ComputeTwoHopReachabilityScores(
+    const std::vector<std::vector<std::pair<size_t, double>>>& adjacency)
+{
+    const size_t n = adjacency.size();
+    std::vector<double> scores(n, 0.0);
+    if (n <= 1)
+    {
+        return scores;
+    }
+
+    for (size_t source = 0; source < n; ++source)
+    {
+        std::queue<std::pair<size_t, uint32_t>> q;
+        std::vector<bool> visited(n, false);
+        visited[source] = true;
+        q.push({source, 0});
+        uint32_t reachable = 0;
+        while (!q.empty())
+        {
+            const auto [node, depth] = q.front();
+            q.pop();
+            if (depth >= 2)
+            {
+                continue;
+            }
+            for (const auto& [neighbor, weight] : adjacency[node])
+            {
+                (void)weight;
+                if (visited[neighbor])
+                {
+                    continue;
+                }
+                visited[neighbor] = true;
+                reachable++;
+                q.push({neighbor, depth + 1});
+            }
+        }
+        scores[source] = static_cast<double>(reachable) / static_cast<double>(n - 1);
+    }
+    return scores;
+}
+
+std::vector<double> ComputeNeighborRedundancyPenalty(
+    const std::vector<std::vector<std::pair<size_t, double>>>& adjacency)
+{
+    const size_t n = adjacency.size();
+    std::vector<std::vector<bool>> connected(n, std::vector<bool>(n, false));
+    for (size_t i = 0; i < n; ++i)
+    {
+        for (const auto& [neighbor, weight] : adjacency[i])
+        {
+            (void)weight;
+            connected[i][neighbor] = true;
+        }
+    }
+
+    std::vector<double> penalty(n, 0.0);
+    for (size_t node = 0; node < n; ++node)
+    {
+        std::vector<size_t> neighbors;
+        for (const auto& [neighbor, weight] : adjacency[node])
+        {
+            (void)weight;
+            neighbors.push_back(neighbor);
+        }
+        if (neighbors.size() < 2)
+        {
+            continue;
+        }
+
+        uint32_t existingLinks = 0;
+        const uint32_t possibleLinks =
+            static_cast<uint32_t>(neighbors.size() * (neighbors.size() - 1) / 2);
+        for (size_t i = 0; i < neighbors.size(); ++i)
+        {
+            for (size_t j = i + 1; j < neighbors.size(); ++j)
+            {
+                if (connected[neighbors[i]][neighbors[j]] ||
+                    connected[neighbors[j]][neighbors[i]])
+                {
+                    existingLinks++;
+                }
+            }
+        }
+        penalty[node] = possibleLinks > 0
+                            ? static_cast<double>(existingLinks) / static_cast<double>(possibleLinks)
+                            : 0.0;
+    }
+    return penalty;
+}
+
+std::vector<double> ComputeInterClusterBridgeScores(
+    const std::vector<std::vector<std::pair<size_t, double>>>& adjacency)
+{
+    const size_t n = adjacency.size();
+    std::vector<std::vector<bool>> connected(n, std::vector<bool>(n, false));
+    for (size_t i = 0; i < n; ++i)
+    {
+        for (const auto& [neighbor, weight] : adjacency[i])
+        {
+            (void)weight;
+            connected[i][neighbor] = true;
+        }
+    }
+
+    std::vector<double> scores(n, 0.0);
+    for (size_t node = 0; node < n; ++node)
+    {
+        std::vector<size_t> neighbors;
+        for (const auto& [neighbor, weight] : adjacency[node])
+        {
+            (void)weight;
+            neighbors.push_back(neighbor);
+        }
+        if (neighbors.size() < 2)
+        {
+            continue;
+        }
+
+        std::set<size_t> remaining(neighbors.begin(), neighbors.end());
+        uint32_t componentCount = 0;
+        while (!remaining.empty())
+        {
+            componentCount++;
+            const size_t seed = *remaining.begin();
+            remaining.erase(seed);
+            std::queue<size_t> q;
+            q.push(seed);
+            while (!q.empty())
+            {
+                const size_t current = q.front();
+                q.pop();
+                for (size_t candidate : neighbors)
+                {
+                    if (remaining.count(candidate) == 0)
+                    {
+                        continue;
+                    }
+                    if (connected[current][candidate] || connected[candidate][current])
+                    {
+                        remaining.erase(candidate);
+                        q.push(candidate);
+                    }
+                }
+            }
+        }
+
+        scores[node] = neighbors.size() > 1
+                           ? Clamp01Local(static_cast<double>(componentCount - 1) /
+                                          static_cast<double>(neighbors.size() - 1))
+                           : 0.0;
+    }
+    return scores;
+}
+
+double ComputeSubsetConnectivityRatio(
+    const std::vector<std::vector<std::pair<size_t, double>>>& adjacency,
+    const std::vector<size_t>& subset,
+    size_t removedNode)
+{
+    if (subset.size() <= 1)
+    {
+        return 1.0;
+    }
+
+    std::set<size_t> subsetSet(subset.begin(), subset.end());
+    subsetSet.erase(removedNode);
+    if (subsetSet.size() <= 1)
+    {
+        return 1.0;
+    }
+
+    std::vector<size_t> activeNodes(subsetSet.begin(), subsetSet.end());
+    uint32_t reachablePairs = 0;
+    uint32_t totalPairs = 0;
+    for (size_t sourceIdx = 0; sourceIdx < activeNodes.size(); ++sourceIdx)
+    {
+        std::vector<bool> visited(adjacency.size(), false);
+        std::queue<size_t> q;
+        const size_t source = activeNodes[sourceIdx];
+        visited[source] = true;
+        q.push(source);
+        while (!q.empty())
+        {
+            const size_t node = q.front();
+            q.pop();
+            for (const auto& [neighbor, weight] : adjacency[node])
+            {
+                (void)weight;
+                if (neighbor == removedNode || subsetSet.count(neighbor) == 0 || visited[neighbor])
+                {
+                    continue;
+                }
+                visited[neighbor] = true;
+                q.push(neighbor);
+            }
+        }
+        for (size_t targetIdx = sourceIdx + 1; targetIdx < activeNodes.size(); ++targetIdx)
+        {
+            totalPairs++;
+            if (visited[activeNodes[targetIdx]])
+            {
+                reachablePairs++;
+            }
+        }
+    }
+    return totalPairs > 0 ? static_cast<double>(reachablePairs) / static_cast<double>(totalPairs)
+                          : 1.0;
+}
+
+std::vector<double> ComputeLocalCutRiskScores(
+    const std::vector<std::vector<std::pair<size_t, double>>>& adjacency)
+{
+    const size_t n = adjacency.size();
+    std::vector<double> scores(n, 0.0);
+    for (size_t node = 0; node < n; ++node)
+    {
+        std::vector<size_t> subset;
+        std::vector<bool> visited(n, false);
+        std::queue<std::pair<size_t, uint32_t>> q;
+        visited[node] = true;
+        subset.push_back(node);
+        q.push({node, 0});
+        while (!q.empty())
+        {
+            const auto [current, depth] = q.front();
+            q.pop();
+            if (depth >= 2)
+            {
+                continue;
+            }
+            for (const auto& [neighbor, weight] : adjacency[current])
+            {
+                (void)weight;
+                if (visited[neighbor])
+                {
+                    continue;
+                }
+                visited[neighbor] = true;
+                subset.push_back(neighbor);
+                q.push({neighbor, depth + 1});
+            }
+        }
+
+        if (subset.size() <= 2)
+        {
+            continue;
+        }
+
+        const double baselineConnectivity =
+            ComputeSubsetConnectivityRatio(adjacency, subset, adjacency.size());
+        const double afterRemoval = ComputeSubsetConnectivityRatio(adjacency, subset, node);
+        scores[node] = Clamp01Local(std::max(0.0, baselineConnectivity - afterRemoval));
+    }
+    return scores;
+}
+
+double ComputeConnectivityRatioWithoutNode(
+    const std::vector<std::vector<std::pair<size_t, double>>>& adjacency,
+    size_t removedNode)
+{
+    const size_t n = adjacency.size();
+    if (removedNode >= n)
+    {
+        return 0.0;
+    }
+
+    std::vector<size_t> activeNodes;
+    activeNodes.reserve(n - 1);
+    for (size_t i = 0; i < n; ++i)
+    {
+        if (i != removedNode)
+        {
+            activeNodes.push_back(i);
+        }
+    }
+
+    if (activeNodes.size() <= 1)
+    {
+        return 1.0;
+    }
+
+    uint32_t reachablePairs = 0;
+    uint32_t totalPairs = 0;
+    for (size_t sourceIdx = 0; sourceIdx < activeNodes.size(); ++sourceIdx)
+    {
+        const size_t source = activeNodes[sourceIdx];
+        std::vector<bool> visited(n, false);
+        std::queue<size_t> q;
+        visited[source] = true;
+        q.push(source);
+
+        while (!q.empty())
+        {
+            const size_t node = q.front();
+            q.pop();
+            for (const auto& [neighbor, weight] : adjacency[node])
+            {
+                (void)weight;
+                if (neighbor == removedNode || visited[neighbor])
+                {
+                    continue;
+                }
+                visited[neighbor] = true;
+                q.push(neighbor);
+            }
+        }
+
+        for (size_t targetIdx = sourceIdx + 1; targetIdx < activeNodes.size(); ++targetIdx)
+        {
+            totalPairs++;
+            if (visited[activeNodes[targetIdx]])
+            {
+                reachablePairs++;
+            }
+        }
+    }
+
+    return totalPairs > 0 ? static_cast<double>(reachablePairs) / totalPairs : 1.0;
+}
+
+std::vector<double> ComputePostRemovalDamageScores(
+    const std::vector<std::vector<std::pair<size_t, double>>>& adjacency)
+{
+    const size_t n = adjacency.size();
+    std::vector<double> scores(n, 0.0);
+    if (n <= 2)
+    {
+        return scores;
+    }
+
+    const double baselineConnectivity = 1.0;
+    for (size_t node = 0; node < n; ++node)
+    {
+        const double afterRemoval = ComputeConnectivityRatioWithoutNode(adjacency, node);
+        scores[node] = Clamp01Local(std::max(0.0, baselineConnectivity - afterRemoval));
+    }
+    return scores;
+}
+
+std::vector<double> ComputeDirectionalInfluenceScores(
+    const std::vector<uint32_t>& nodes,
+    const std::map<uint32_t, size_t>& nodeIndex,
+    const std::vector<InferredTopologyEdge>& edges)
+{
+    std::vector<double> scores(nodes.size(), 0.0);
+    std::vector<uint32_t> incidentCount(nodes.size(), 0);
+    for (const auto& edge : edges)
+    {
+        const auto srcIt = nodeIndex.find(edge.srcObservedNodeId);
+        const auto dstIt = nodeIndex.find(edge.dstObservedNodeId);
+        if (srcIt == nodeIndex.end() || dstIt == nodeIndex.end())
+        {
+            continue;
+        }
+
+        const double forwardSupport = AverageDirectionalCausalSupport(edge.laggedPredictiveScoreForward,
+                                                                      edge.directedResponseScoreForward,
+                                                                      edge.excitationScoreForward);
+        const double backwardSupport =
+            AverageDirectionalCausalSupport(edge.laggedPredictiveScoreBackward,
+                                            edge.directedResponseScoreBackward,
+                                            edge.excitationScoreBackward);
+        const double asymmetry = edge.directionalityScore;
+        const double srcContribution =
+            edge.dominantDirection == "src_to_dst"
+                ? Clamp01Local(0.75 * forwardSupport + 0.25 * asymmetry)
+                : edge.dominantDirection == "bidirectional"
+                      ? Clamp01Local(0.50 * forwardSupport + 0.15 * asymmetry)
+                      : Clamp01Local(0.20 * forwardSupport);
+        const double dstContribution =
+            edge.dominantDirection == "dst_to_src"
+                ? Clamp01Local(0.75 * backwardSupport + 0.25 * asymmetry)
+                : edge.dominantDirection == "bidirectional"
+                      ? Clamp01Local(0.50 * backwardSupport + 0.15 * asymmetry)
+                      : Clamp01Local(0.20 * backwardSupport);
+
+        scores[srcIt->second] += srcContribution;
+        scores[dstIt->second] += dstContribution;
+        incidentCount[srcIt->second]++;
+        incidentCount[dstIt->second]++;
+    }
+
+    for (size_t i = 0; i < scores.size(); ++i)
+    {
+        if (incidentCount[i] > 0)
+        {
+            scores[i] = Clamp01Local(scores[i] / static_cast<double>(incidentCount[i]));
+        }
+    }
+    return scores;
+}
+
 void PopulateRecommendationsFromLatestInference()
 {
     g_nonCooperativeAttackRuntime.recommendations.clear();
@@ -861,6 +1311,11 @@ void PopulateRecommendationsFromLatestInference()
     }
 
     std::vector<std::vector<std::pair<size_t, double>>> adjacency(nodes.size());
+    std::vector<double> evidenceSum(nodes.size(), 0.0);
+    std::vector<double> confidenceSum(nodes.size(), 0.0);
+    std::vector<double> causalSum(nodes.size(), 0.0);
+    std::vector<double> temporalSum(nodes.size(), 0.0);
+    std::vector<uint32_t> incidentCount(nodes.size(), 0);
     for (const auto& edge : batch.edges)
     {
         const size_t src = nodeIndex.at(edge.srcObservedNodeId);
@@ -869,6 +1324,17 @@ void PopulateRecommendationsFromLatestInference()
             std::max(kMinEdgeWeight, edge.edgeProbability * std::max(0.1, edge.edgeConfidence));
         adjacency[src].push_back({dst, weight});
         adjacency[dst].push_back({src, weight});
+
+        const double causalSupport =
+            (edge.laggedPredictiveScore + edge.directedResponseScore + edge.excitationScore) / 3.0;
+        for (const size_t idx : {src, dst})
+        {
+            evidenceSum[idx] += edge.edgeProbability;
+            confidenceSum[idx] += edge.edgeConfidence;
+            causalSum[idx] += causalSupport;
+            temporalSum[idx] += edge.temporalContinuityScore;
+            incidentCount[idx]++;
+        }
     }
 
     const std::vector<double> degree = ComputeWeightedDegree(adjacency);
@@ -882,6 +1348,21 @@ void PopulateRecommendationsFromLatestInference()
     const std::vector<double> closenessNorm = NormalizeMetric(closeness);
     const std::vector<double> pagerankNorm = NormalizeMetric(pagerank);
     const std::vector<double> kshellNorm = NormalizeMetric(kshell);
+    const std::vector<double> localBridge = ComputeLocalBridgeScores(adjacency);
+    const std::vector<double> postRemovalDamage = ComputePostRemovalDamageScores(adjacency);
+    const std::vector<double> twoHopReachability = ComputeTwoHopReachabilityScores(adjacency);
+    const std::vector<double> interClusterBridge = ComputeInterClusterBridgeScores(adjacency);
+    const std::vector<double> localCutRisk = ComputeLocalCutRiskScores(adjacency);
+    const std::vector<double> neighborRedundancy = ComputeNeighborRedundancyPenalty(adjacency);
+    const std::vector<double> directionalInfluence =
+        ComputeDirectionalInfluenceScores(nodes, nodeIndex, batch.edges);
+    const std::vector<double> localBridgeNorm = NormalizeMetric(localBridge);
+    const std::vector<double> postRemovalDamageNorm = NormalizeMetric(postRemovalDamage);
+    const std::vector<double> twoHopReachabilityNorm = NormalizeMetric(twoHopReachability);
+    const std::vector<double> interClusterBridgeNorm = NormalizeMetric(interClusterBridge);
+    const std::vector<double> localCutRiskNorm = NormalizeMetric(localCutRisk);
+    const std::vector<double> neighborRedundancyNorm = NormalizeMetric(neighborRedundancy);
+    const std::vector<double> directionalInfluenceNorm = NormalizeMetric(directionalInfluence);
 
     std::vector<NonCooperativeAttackRecommendation> recommendations;
     recommendations.reserve(nodes.size());
@@ -896,12 +1377,40 @@ void PopulateRecommendationsFromLatestInference()
         rec.weightedClosenessCentrality = closenessNorm[i];
         rec.weightedPageRank = pagerankNorm[i];
         rec.weightedKShell = kshellNorm[i];
-        rec.recommendedScore =
+        rec.structureScore =
             (degreeNorm[i] + betweennessNorm[i] + closenessNorm[i] + pagerankNorm[i] +
              kshellNorm[i]) /
             5.0;
+        rec.evidenceSupportScore =
+            incidentCount[i] > 0
+                ? Clamp01Local(
+                      0.65 * (evidenceSum[i] / incidentCount[i]) +
+                      0.35 * (confidenceSum[i] / incidentCount[i]))
+                : 0.0;
+        rec.causalSupportScore =
+            incidentCount[i] > 0 ? Clamp01Local(causalSum[i] / incidentCount[i]) : 0.0;
+        rec.directionalInfluenceScore = directionalInfluenceNorm[i];
+        rec.temporalStabilityScore =
+            incidentCount[i] > 0 ? Clamp01Local(temporalSum[i] / incidentCount[i]) : 0.0;
+        rec.localBridgeScore = localBridgeNorm[i];
+        rec.postRemovalDamageScore = postRemovalDamageNorm[i];
+        rec.twoHopReachabilityScore = twoHopReachabilityNorm[i];
+        rec.interClusterBridgeScore = interClusterBridgeNorm[i];
+        rec.localCutRiskScore = localCutRiskNorm[i];
+        rec.neighborRedundancyPenalty = neighborRedundancyNorm[i];
+        rec.recommendedScore =
+            Clamp01Local(0.26 * rec.structureScore + 0.12 * rec.evidenceSupportScore +
+                         0.12 * rec.causalSupportScore +
+                         0.08 * rec.directionalInfluenceScore +
+                         0.08 * rec.temporalStabilityScore +
+                         0.07 * rec.localBridgeScore + 0.07 * rec.postRemovalDamageScore +
+                         0.07 * rec.twoHopReachabilityScore +
+                         0.07 * rec.interClusterBridgeScore +
+                         0.10 * rec.localCutRiskScore -
+                         0.04 * rec.neighborRedundancyPenalty);
         rec.recommendationReason =
-            "equal_weight_fusion(degree|betweenness|closeness|pagerank|kshell)";
+            "fusion(structure|evidence|causality|directional|temporal|bridge|post_removal_damage|two_hop|inter_cluster|cut_risk|redundancy_penalty)";
+        rec.inferenceMethod = "directed_dynamic_graph_bridge_fusion_v4";
         recommendations.push_back(rec);
     }
 
@@ -926,7 +1435,13 @@ void PopulateRecommendationsFromLatestInference()
                 << rec.windowStart << "," << rec.windowEnd << ","
                 << rec.recommendedObservedNodeId << "," << rec.recommendedScore << ","
                 << rec.recommendationRank << "," << rec.recommendationReason << ","
-                << rec.inferenceMethod << "," << rec.weightedDegreeCentrality << ","
+                << rec.inferenceMethod << "," << rec.structureScore << ","
+                << rec.evidenceSupportScore << "," << rec.causalSupportScore << ","
+                << rec.directionalInfluenceScore << "," << rec.temporalStabilityScore << ","
+                << rec.localBridgeScore << "," << rec.postRemovalDamageScore << ","
+                << rec.twoHopReachabilityScore << "," << rec.interClusterBridgeScore << ","
+                << rec.localCutRiskScore << "," << rec.neighborRedundancyPenalty << ","
+                << rec.weightedDegreeCentrality << ","
                 << rec.weightedBetweennessCentrality << ","
                 << rec.weightedClosenessCentrality << "," << rec.weightedPageRank << ","
                 << rec.weightedKShell << "\n";
@@ -943,6 +1458,34 @@ void PopulateRecommendationsFromLatestInference()
             static_cast<int32_t>(recommendations.front().recommendedObservedNodeId);
         g_nonCooperativeAttackRuntime.lastRecommendationReason =
             recommendations.front().recommendationReason;
+        g_nonCooperativeAttackRuntime.attackPlan.recommendedScore =
+            recommendations.front().recommendedScore;
+        g_nonCooperativeAttackRuntime.attackPlan.recommendationReason =
+            recommendations.front().recommendationReason;
+        g_nonCooperativeAttackRuntime.attackPlan.inferenceMethod =
+            recommendations.front().inferenceMethod;
+        g_nonCooperativeAttackRuntime.attackPlan.structureScore =
+            recommendations.front().structureScore;
+        g_nonCooperativeAttackRuntime.attackPlan.evidenceSupportScore =
+            recommendations.front().evidenceSupportScore;
+        g_nonCooperativeAttackRuntime.attackPlan.causalSupportScore =
+            recommendations.front().causalSupportScore;
+        g_nonCooperativeAttackRuntime.attackPlan.directionalInfluenceScore =
+            recommendations.front().directionalInfluenceScore;
+        g_nonCooperativeAttackRuntime.attackPlan.temporalStabilityScore =
+            recommendations.front().temporalStabilityScore;
+        g_nonCooperativeAttackRuntime.attackPlan.localBridgeScore =
+            recommendations.front().localBridgeScore;
+        g_nonCooperativeAttackRuntime.attackPlan.postRemovalDamageScore =
+            recommendations.front().postRemovalDamageScore;
+        g_nonCooperativeAttackRuntime.attackPlan.twoHopReachabilityScore =
+            recommendations.front().twoHopReachabilityScore;
+        g_nonCooperativeAttackRuntime.attackPlan.interClusterBridgeScore =
+            recommendations.front().interClusterBridgeScore;
+        g_nonCooperativeAttackRuntime.attackPlan.localCutRiskScore =
+            recommendations.front().localCutRiskScore;
+        g_nonCooperativeAttackRuntime.attackPlan.neighborRedundancyPenalty =
+            recommendations.front().neighborRedundancyPenalty;
     }
 }
 
@@ -1228,7 +1771,7 @@ bool BuildCurrentNonCooperativeAttackPlan(NonCooperativeAttackPlan& plan)
     plan.confirmedObservedNodeId =
         cfg.manualStrikeTarget >= 0 ? cfg.manualStrikeTarget : plan.recommendedObservedNodeId;
     plan.userTriggeredExecution =
-        cfg.manualStrikeTarget >= 0 && cfg.attackExecuteTime >= 0.0;
+        cfg.attackExecuteTime >= 0.0;
     plan.attackExecuteTime = cfg.attackExecuteTime;
     if (!g_nonCooperativeAttackRuntime.attackExecuted)
     {
@@ -1241,6 +1784,30 @@ bool BuildCurrentNonCooperativeAttackPlan(NonCooperativeAttackPlan& plan)
         plan.evaluationWindowStart = cfg.attackExecuteTime;
         plan.evaluationWindowEnd = cfg.attackExecuteTime + cfg.attackEvaluationDuration;
     }
+
+    for (const auto& rec : g_nonCooperativeAttackRuntime.recommendations)
+    {
+        if (static_cast<int32_t>(rec.recommendedObservedNodeId) != plan.recommendedObservedNodeId)
+        {
+            continue;
+        }
+        plan.recommendedScore = rec.recommendedScore;
+        plan.recommendationReason = rec.recommendationReason;
+        plan.inferenceMethod = rec.inferenceMethod;
+        plan.structureScore = rec.structureScore;
+        plan.evidenceSupportScore = rec.evidenceSupportScore;
+        plan.causalSupportScore = rec.causalSupportScore;
+        plan.directionalInfluenceScore = rec.directionalInfluenceScore;
+        plan.temporalStabilityScore = rec.temporalStabilityScore;
+        plan.localBridgeScore = rec.localBridgeScore;
+        plan.postRemovalDamageScore = rec.postRemovalDamageScore;
+        plan.twoHopReachabilityScore = rec.twoHopReachabilityScore;
+        plan.interClusterBridgeScore = rec.interClusterBridgeScore;
+        plan.localCutRiskScore = rec.localCutRiskScore;
+        plan.neighborRedundancyPenalty = rec.neighborRedundancyPenalty;
+        break;
+    }
+
     g_nonCooperativeAttackRuntime.attackPlan = plan;
     g_nonCooperativeAttackRuntime.currentConfirmedObservedNodeId =
         plan.confirmedObservedNodeId;
