@@ -5,6 +5,7 @@ build/
 *.o
 *.pch
 *.gch
+.venv
 
 # Benchmark output files (large data files)
 benchmark/*/flowmon.xml
