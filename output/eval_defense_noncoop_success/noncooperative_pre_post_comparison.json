@@ -1,0 +1,34 @@
+{
+  "phaseMetrics": {
+    "pre_attack": {
+      "global": {"count": 40, "connectivityRatio": 1, "pdr": 0.581918, "throughputMbps": 2.14447, "delayMs": 19.6558, "maxDamageDuration": 0, "maxRecoveryProgress": 0.99847},
+      "target_neighborhood": {"count": 40, "connectivityRatio": 1, "pdr": 0.581918, "throughputMbps": 2.14447, "delayMs": 19.6558, "maxDamageDuration": 0, "maxRecoveryProgress": 0.99847}
+    },
+    "immediate_post_attack": {
+      "global": {"count": 20, "connectivityRatio": 0.75, "pdr": 0.463742, "throughputMbps": 1.81064, "delayMs": 76.3243, "maxDamageDuration": 1.9, "maxRecoveryProgress": 0.672279},
+      "target_neighborhood": {"count": 20, "connectivityRatio": 0.75, "pdr": 0.463742, "throughputMbps": 1.81064, "delayMs": 76.3243, "maxDamageDuration": 1.9, "maxRecoveryProgress": 0.672279}
+    },
+    "recovery": {
+      "global": {"count": 100, "connectivityRatio": 0.75, "pdr": 0.45287, "throughputMbps": 1.71121, "delayMs": 76.6495, "maxDamageDuration": 11.9, "maxRecoveryProgress": 0.656126},
+      "target_neighborhood": {"count": 100, "connectivityRatio": 0.75, "pdr": 0.45287, "throughputMbps": 1.71121, "delayMs": 76.6495, "maxDamageDuration": 11.9, "maxRecoveryProgress": 0.656126}
+    },
+    "final": {
+      "global": {"count": 1, "connectivityRatio": 0.75, "pdr": 0.446145, "throughputMbps": 1.68791, "delayMs": 76.8849, "maxDamageDuration": 12, "maxRecoveryProgress": 0.639858},
+      "target_neighborhood": {"count": 1, "connectivityRatio": 0.75, "pdr": 0.446145, "throughputMbps": 1.68791, "delayMs": 76.8849, "maxDamageDuration": 12, "maxRecoveryProgress": 0.639858}
+    }
+  },
+  "finalMetrics": {
+    "global": {"connectivityRatio": 0.75, "pdr": 0.446145, "throughputMbps": 1.68791, "delayMs": 76.8849},
+    "target_neighborhood": {"connectivityRatio": 0.75, "pdr": 0.446145, "throughputMbps": 1.68791, "delayMs": 76.8849}
+  },
+  "recoverySummary": {
+    "attackExecuted": true,
+    "actualAttackExecutionTime": 60,
+    "recoveryCompletedAt": null,
+    "executedObservedNodeId": 200002,
+    "executedEntityNodeId": 2,
+    "executedTargetObjectKey": 1002,
+    "targetNeighborhoodSize": 8,
+    "eventCount": 1
+  }
+}

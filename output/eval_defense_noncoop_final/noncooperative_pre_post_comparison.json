@@ -1,0 +1,34 @@
+{
+  "phaseMetrics": {
+    "pre_attack": {
+      "global": {"count": 40, "connectivityRatio": 0.09375, "pdr": 0.0248293, "throughputMbps": 0.0209518, "delayMs": 229.443, "maxDamageDuration": 0, "maxRecoveryProgress": 0.999233},
+      "target_neighborhood": {"count": 0, "connectivityRatio": null, "pdr": null, "throughputMbps": null, "delayMs": null, "maxDamageDuration": null, "maxRecoveryProgress": null}
+    },
+    "immediate_post_attack": {
+      "global": {"count": 20, "connectivityRatio": 0.0714286, "pdr": 0.0211001, "throughputMbps": 0.0207102, "delayMs": 234.261, "maxDamageDuration": 0, "maxRecoveryProgress": 0.898976},
+      "target_neighborhood": {"count": 0, "connectivityRatio": null, "pdr": null, "throughputMbps": null, "delayMs": null, "maxDamageDuration": null, "maxRecoveryProgress": null}
+    },
+    "recovery": {
+      "global": {"count": 100, "connectivityRatio": 0.0714286, "pdr": 0.0197662, "throughputMbps": 0.0170454, "delayMs": 234.308, "maxDamageDuration": 0, "maxRecoveryProgress": 0.885163},
+      "target_neighborhood": {"count": 0, "connectivityRatio": null, "pdr": null, "throughputMbps": null, "delayMs": null, "maxDamageDuration": null, "maxRecoveryProgress": null}
+    },
+    "final": {
+      "global": {"count": 1, "connectivityRatio": 0.0714286, "pdr": 0.018024, "throughputMbps": 0.0134854, "delayMs": 234.369, "maxDamageDuration": 0, "maxRecoveryProgress": 0.77761},
+      "target_neighborhood": {"count": 0, "connectivityRatio": null, "pdr": null, "throughputMbps": null, "delayMs": null, "maxDamageDuration": null, "maxRecoveryProgress": null}
+    }
+  },
+  "finalMetrics": {
+    "global": {"connectivityRatio": 0.0714286, "pdr": 0.018024, "throughputMbps": 0.0134854, "delayMs": 234.369},
+    "target_neighborhood": {"connectivityRatio": null, "pdr": null, "throughputMbps": null, "delayMs": null}
+  },
+  "recoverySummary": {
+    "attackExecuted": false,
+    "actualAttackExecutionTime": null,
+    "recoveryCompletedAt": null,
+    "executedObservedNodeId": -1,
+    "executedEntityNodeId": -1,
+    "executedTargetObjectKey": -1,
+    "targetNeighborhoodSize": 0,
+    "eventCount": 0
+  }
+}

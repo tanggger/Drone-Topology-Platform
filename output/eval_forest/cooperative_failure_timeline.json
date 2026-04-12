@@ -1,0 +1,30 @@
+{
+  "events": [
+    {
+      "eventId": 0,
+      "time": 80,
+      "failureType": "node_failure",
+      "targetNodeId": 1,
+      "targetRole": "follower",
+      "isLeaderTarget": false,
+      "failureState": "activated",
+      "affectedNeighborCount": 14,
+      "affectedLinkCount": 14,
+      "effectSummary": "target node 1 removed from cooperative set",
+      "source": "simulation_configured_fault"
+    },
+    {
+      "eventId": 1,
+      "time": 120,
+      "failureType": "node_failure",
+      "targetNodeId": 1,
+      "targetRole": "follower",
+      "isLeaderTarget": false,
+      "failureState": "cleared",
+      "affectedNeighborCount": 14,
+      "affectedLinkCount": 14,
+      "effectSummary": "target node 1 removed from cooperative set",
+      "source": "simulation_configured_fault"
+    }
+  ]
+}

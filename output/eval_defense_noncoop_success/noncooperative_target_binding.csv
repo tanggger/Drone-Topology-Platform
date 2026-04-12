@@ -1,0 +1,2 @@
+eventTime,observedNodeId,bindingStatus,bindingConfidence,isTrackStable,isTrackActive,boundTargetObjectKey,executedEntityNodeId,isTrueCriticalTarget,mismatchType
+60,200002,binding_success,0.803115,1,1,1002,2,0,not_evaluated

@@ -5,6 +5,7 @@ build/
 *.o
 *.pch
 *.gch
+*.pc
 .venv
 
 # Benchmark output files (large data files)
@@ -19,6 +20,7 @@ cmake_install.cmake
 CMakeCache.txt
 *.cmake
 !build-support/**/*.cmake
+Makefile
 
 # Output directories
 # output/

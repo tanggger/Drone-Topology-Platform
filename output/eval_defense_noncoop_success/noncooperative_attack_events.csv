@@ -1,0 +1,2 @@
+eventTime,attackType,recommendedObservedNodeId,confirmedObservedNodeId,executedObservedNodeId,targetBindingStatus,isTrueTargetHit,targetMismatchType,nodeRemoved,executedEntityNodeId,boundTargetObjectKey
+60,node_strike,200002,200002,200002,binding_success,0,not_evaluated,1,2,1002

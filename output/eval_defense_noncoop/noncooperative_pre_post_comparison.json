@@ -1,0 +1,34 @@
+{
+  "phaseMetrics": {
+    "pre_attack": {
+      "global": {"count": 40, "connectivityRatio": 0.15, "pdr": 0.0578103, "throughputMbps": 0.164555, "delayMs": 217.089, "maxDamageDuration": 0, "maxRecoveryProgress": 0.997809},
+      "target_neighborhood": {"count": 40, "connectivityRatio": 0, "pdr": 0, "throughputMbps": 0, "delayMs": 250, "maxDamageDuration": 0, "maxRecoveryProgress": 0}
+    },
+    "immediate_post_attack": {
+      "global": {"count": 20, "connectivityRatio": 0.142857, "pdr": 0.0473373, "throughputMbps": 0.105643, "delayMs": 219.075, "maxDamageDuration": 1.9, "maxRecoveryProgress": 0.863598},
+      "target_neighborhood": {"count": 20, "connectivityRatio": 0, "pdr": 0, "throughputMbps": 0, "delayMs": 250, "maxDamageDuration": 1.9, "maxRecoveryProgress": 0}
+    },
+    "recovery": {
+      "global": {"count": 100, "connectivityRatio": 0.142143, "pdr": 0.0358582, "throughputMbps": 0.0461492, "delayMs": 219.557, "maxDamageDuration": 11.9, "maxRecoveryProgress": 0.826998},
+      "target_neighborhood": {"count": 100, "connectivityRatio": 0, "pdr": 0, "throughputMbps": 0, "delayMs": 250, "maxDamageDuration": 11.9, "maxRecoveryProgress": 0}
+    },
+    "final": {
+      "global": {"count": 1, "connectivityRatio": 0.142857, "pdr": 0.0333901, "throughputMbps": 0.0438263, "delayMs": 219.778, "maxDamageDuration": 12, "maxRecoveryProgress": 0.696014},
+      "target_neighborhood": {"count": 1, "connectivityRatio": 0, "pdr": 0, "throughputMbps": 0, "delayMs": 250, "maxDamageDuration": 12, "maxRecoveryProgress": 0}
+    }
+  },
+  "finalMetrics": {
+    "global": {"connectivityRatio": 0.142857, "pdr": 0.0333901, "throughputMbps": 0.0438263, "delayMs": 219.778},
+    "target_neighborhood": {"connectivityRatio": 0, "pdr": 0, "throughputMbps": 0, "delayMs": 250}
+  },
+  "recoverySummary": {
+    "attackExecuted": true,
+    "actualAttackExecutionTime": 120,
+    "recoveryCompletedAt": null,
+    "executedObservedNodeId": 200000,
+    "executedEntityNodeId": -1,
+    "executedTargetObjectKey": -1,
+    "targetNeighborhoodSize": 3,
+    "eventCount": 1
+  }
+}
