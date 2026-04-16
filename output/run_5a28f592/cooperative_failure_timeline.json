@@ -1,0 +1,17 @@
+{
+  "events": [
+    {
+      "eventId": 0,
+      "time": 80,
+      "failureType": "node_failure",
+      "targetNodeId": 7,
+      "targetRole": "follower",
+      "isLeaderTarget": false,
+      "failureState": "activated",
+      "affectedNeighborCount": 14,
+      "affectedLinkCount": 14,
+      "effectSummary": "target node 7 removed from cooperative set",
+      "source": "simulation_configured_fault"
+    }
+  ]
+}

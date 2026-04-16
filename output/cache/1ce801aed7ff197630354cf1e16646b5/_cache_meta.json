@@ -1,0 +1,129 @@
+{
+  "config_hash": "1ce801aed7ff197630354cf1e16646b5",
+  "params": {
+    "num_drones": 15,
+    "formation": "v_formation",
+    "formation_spacing": 12.0,
+    "start": "0,0,30",
+    "target": "500,500,30",
+    "difficulty": "Hard",
+    "strategy": "dynamic",
+    "operationMode": "cooperative",
+    "communicationMode": "hybrid",
+    "sceneType": "urban",
+    "map_name": null,
+    "map_file": null,
+    "buildings": [
+      {
+        "xMin": 180,
+        "xMax": 230,
+        "yMin": 150,
+        "yMax": 200,
+        "zMin": 0,
+        "zMax": 80
+      },
+      {
+        "xMin": 300,
+        "xMax": 360,
+        "yMin": 200,
+        "yMax": 240,
+        "zMin": 0,
+        "zMax": 100
+      },
+      {
+        "xMin": 400,
+        "xMax": 445,
+        "yMin": 120,
+        "yMax": 175,
+        "zMin": 0,
+        "zMax": 70
+      },
+      {
+        "xMin": 250,
+        "xMax": 305,
+        "yMin": 350,
+        "yMax": 395,
+        "zMin": 0,
+        "zMax": 90
+      },
+      {
+        "xMin": 420,
+        "xMax": 470,
+        "yMin": 320,
+        "yMax": 370,
+        "zMin": 0,
+        "zMax": 110
+      },
+      {
+        "xMin": 150,
+        "xMax": 190,
+        "yMin": 400,
+        "yMax": 460,
+        "zMin": 0,
+        "zMax": 75
+      },
+      {
+        "xMin": 350,
+        "xMax": 415,
+        "yMin": 450,
+        "yMax": 485,
+        "zMin": 0,
+        "zMax": 85
+      },
+      {
+        "xMin": 500,
+        "xMax": 545,
+        "yMin": 250,
+        "yMax": 300,
+        "zMin": 0,
+        "zMax": 95
+      },
+      {
+        "xMin": 100,
+        "xMax": 150,
+        "yMin": 280,
+        "yMax": 320,
+        "zMin": 0,
+        "zMax": 60
+      }
+    ],
+    "leaderNodeId": 0,
+    "backupLeaderList": "2,3,4",
+    "distributedHopLimit": 1,
+    "cooperativeFailureType": "node_failure",
+    "failureTargetId": 7,
+    "failureStartTime": 80.0,
+    "failureDuration": 40.0,
+    "recoveryPolicy": "global_recovery",
+    "recoveryObjective": "connectivity",
+    "recoveryCooldown": 1.0,
+    "allowChannelReallocation": true,
+    "allowPowerAdjustment": true,
+    "allowRateAdjustment": true,
+    "allowRelayReselection": true,
+    "allowSlotReallocation": true,
+    "allowRouteRebuild": true,
+    "enableNonCooperativeAttack": false,
+    "attackType": "node_strike",
+    "manualStrikeTarget": -1,
+    "attackExecuteTime": -1.0,
+    "attackEvaluationDuration": 12.0,
+    "attackNeighborhoodHop": 1,
+    "urbanAltitudePenaltyDbLow": -1.0,
+    "urbanAltitudeGainDbHigh": -1.0,
+    "urbanStreetCanyonFactor": -1.0,
+    "lakeVolatilityJitterDb": -1.0,
+    "lakeDeepFadeProbability": -1.0,
+    "lakeDeepFadeMaxDb": -1.0,
+    "lakeReflectionDelayJitterMs": -1.0,
+    "carrierFrequencyGHz": -1.0,
+    "channelBandwidthMHz": -1.0,
+    "polarizationMode": "",
+    "reroutePressureFactor": -1.0,
+    "controlMessageUrgencyFactor": -1.0,
+    "relayInstabilityFactor": -1.0,
+    "formationReconfigPenalty": -1.0,
+    "custom_params": {}
+  },
+  "source_task_id": "5a28f592"
+}

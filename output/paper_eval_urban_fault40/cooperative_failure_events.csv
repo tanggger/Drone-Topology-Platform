@@ -1,0 +1,3 @@
+time,failure_type,target_node_id,is_leader_target,failure_state,communication_mode,recovery_policy,scene_type,operation_mode
+40,node_failure,1,false,activated,centralized,global_recovery,urban,cooperative
+80,node_failure,1,false,cleared,centralized,global_recovery,urban,cooperative

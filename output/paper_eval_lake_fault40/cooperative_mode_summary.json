@@ -1,0 +1,25 @@
+{
+  "operationMode": "cooperative",
+  "communicationMode": "centralized",
+  "recoveryPolicy": "global_recovery",
+  "recoveryObjective": "connectivity",
+  "sceneType": "lake",
+  "difficulty": "Moderate",
+  "formation": "v_formation",
+  "leaderNodeId": 0,
+  "backupLeaderList": "",
+  "distributedHopLimit": 1,
+  "failureType": "node_failure",
+  "failureTargetId": 1,
+  "failureStartTime": 40,
+  "failureDuration": 40,
+  "recoveryCooldown": 1,
+  "actionFlags": {
+    "allowChannelReallocation": true,
+    "allowPowerAdjustment": true,
+    "allowRateAdjustment": true,
+    "allowRelayReselection": true,
+    "allowSlotReallocation": true,
+    "allowRouteRebuild": true
+  }
+}
