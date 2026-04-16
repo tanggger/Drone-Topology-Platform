@@ -1,6 +1,8 @@
-# Wing-Net Omni
+# Fengru_Skycore_Backend
 
-Wing-Net Omni is a backend-centered UAV swarm communication simulation and confrontation platform built on top of `ns-3.43`.
+[English](README.md) | [简体中文](README.zh-CN.md)
+
+Fengru_Skycore_Backend is a backend-centered UAV swarm communication simulation and confrontation platform built on top of `ns-3.43`.
 
 It is designed to support two major mission modes:
 
@@ -216,7 +218,7 @@ The backend follows this high-level flow:
 
 ## 4. Core Backend Workflows
 
-## 4.1 Cooperative workflow
+### 4.1 Cooperative workflow
 
 The cooperative pipeline is:
 
@@ -254,7 +256,7 @@ Core outputs:
 - `cooperative_recovery_metrics.csv`
 - `cooperative_decision_trace.csv`
 
-## 4.2 Non-cooperative workflow
+### 4.2 Non-cooperative workflow
 
 The non-cooperative pipeline is:
 
@@ -447,7 +449,7 @@ Related closure document:
 
 This section focuses on the backend algorithms that matter for understanding the system logic.
 
-## 8.1 Cooperative algorithms
+### 8.1 Cooperative algorithms
 
 The cooperative side uses a rule-driven cross-layer recovery controller rather than a single monolithic optimizer.
 
@@ -461,7 +463,7 @@ Implemented logic includes:
 
 This is closer to an explainable engineering control baseline than to a learned policy.
 
-## 8.2 Non-cooperative inference algorithms
+### 8.2 Non-cooperative inference algorithms
 
 The non-cooperative side already includes two rounds of algorithm enhancement.
 
@@ -514,7 +516,7 @@ Algorithm design notes:
 
 - [`project_docs/NON_COOPERATIVE_INFERENCE_ALGORITHM_ENHANCEMENT_PLAN.md`](project_docs/NON_COOPERATIVE_INFERENCE_ALGORITHM_ENHANCEMENT_PLAN.md)
 
-## 8.3 Recommendation effectiveness evaluation
+### 8.3 Recommendation effectiveness evaluation
 
 The repository also contains a script to evaluate whether the current recommendation algorithm is actually useful:
 
@@ -633,25 +635,50 @@ The upstream ns-3 source tree under `src/`, `examples/`, `utils/`, and related d
 
 ## 12. Build and Run
 
-## 12.1 Build
+### 12.1 Build
+
+Whether you plan to run the simulation directly or start the backend API for frontend integration, build the project with the same two commands:
 
 ```bash
+./ns3 configure --build-profile=optimized --enable-examples --enable-tests
 ./ns3 build uav_resource_allocation
 ```
 
-## 12.2 Start backend API
+### 12.2 Run the simulation directly
+
+If you do not need the frontend, you can run the ns-3 program directly.
+
+Typical entry:
+
+```bash
+./ns3 run "uav_resource_allocation --help"
+```
+
+Example:
+
+```bash
+./ns3 run "uav_resource_allocation --strategy=graph_coloring --numUAVs=15 --numChannels=3 --duration=200 --outputDir=output/manual_run"
+```
+
+The direct simulation entry used in this project is `uav_resource_allocation`.
+
+### 12.3 Start backend API
+
+If you need frontend integration or HTTP-based task submission, start the Flask API after building:
 
 ```bash
 python3 api_server/app.py
 ```
 
-Default API address:
+Local access address:
 
 ```text
-http://0.0.0.0:5000
+http://127.0.0.1:5000
 ```
 
-## 12.3 Run validation
+The server binds to `0.0.0.0:5000` by default.
+
+### 12.4 Run validation
 
 Full feature validation:
 
